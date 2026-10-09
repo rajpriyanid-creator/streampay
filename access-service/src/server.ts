@@ -245,6 +245,19 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Gated Content Segment Delivery Route ────────────────────────
+app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Response) => {
+  const { token } = req.query;
+  if (!token) {
+    res.status(401).json({ error: 'Unauthorized: Missing segment access token' });
+    return;
+  }
+  const segmentData = Buffer.from(`STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_TOKEN_${token}`);
+  res.setHeader('Content-Type', 'video/mp2t');
+  res.send(segmentData);
+});
+
+
 // ─── Latest Session Voucher Query (for merchant checkpointing) ──
 app.get('/api/session/latest-voucher/:sessionId', (req: Request, res: Response) => {
   const { sessionId } = req.params;

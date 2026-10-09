@@ -43,8 +43,8 @@ interface VoucherLog {
 }
 
 export default function StreamPayDashboard() {
-  // Wallet & Account State
-  const [payerAddress, setPayerAddress] = useState<Hex>(devSignerAccount.address);
+  // Wallet & Account State (Payer distinct from Session Signer to satisfy contract PayerEqualsSessionSigner check)
+  const [payerAddress, setPayerAddress] = useState<Hex>('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266');
   const [recipientAddress, setRecipientAddress] = useState<Hex>('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
   const [walletMode, setWalletMode] = useState<'MERA_PASSKEY' | 'DEV_LOCAL'>('DEV_LOCAL');
 
@@ -258,26 +258,17 @@ export default function StreamPayDashboard() {
 
         setVoucherLogs((prev) => [newLog, ...prev.slice(0, 19)]);
       } else {
-        console.warn('Access service gated segment check:', gateData.error || gateData);
-        // Fallback progress if server is starting up
-        setCumulativeUnits(nextCumUnits);
-        setCurrentSegment(segIndex + 1);
-        setVoucherLogs((prev) => [
-          {
-            id: `${segIndex}-${Date.now()}`,
-            cumulativeUnits: nextCumUnits,
-            segmentIndex: segIndex,
-            timestamp: new Date().toLocaleTimeString(),
-            signature,
-            status: 'VERIFIED_OFFCHAIN',
-          },
-          ...prev.slice(0, 19),
-        ]);
+        // FAIL CLOSED: Pause stream and do NOT advance cumulative state if access service rejects voucher
+        handlePauseStream();
+        setStatusMsg({ text: `Access Gate Rejected Voucher: ${gateData.error || 'Unauthorized'}`, type: 'error' });
       }
     } catch (e: any) {
       console.error('Error signing EIP-712 voucher:', e);
+      handlePauseStream();
+      setStatusMsg({ text: `Voucher Signing Failed: ${e.message}`, type: 'error' });
     }
   };
+
 
   const handleStartStream = () => {
     if (!session || session.status !== 'OPEN') {

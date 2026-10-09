@@ -257,7 +257,8 @@ contract StreamPaySettlement is EIP712, ReentrancyGuard, Ownable2Step {
     constructor(
         address _paymentToken,
         address _owner
-    ) EIP712("StreamPay", "2") Ownable(_owner) {
+    ) EIP712("StreamPaySettlement", "2.5") Ownable(_owner) {
+
         if (_paymentToken == address(0)) revert ZeroAddress();
         paymentToken = IERC20(_paymentToken);
     }
