@@ -26,11 +26,11 @@ export interface StoredSessionVoucher {
   totalServedSegments: number;
 }
 
-// In-memory store for active streaming vouchers by sessionId
+// In-memory store for active streaming session vouchers
 const voucherStore = new Map<string, StoredSessionVoucher>();
 
 /**
- * Verifies EIP-712 Voucher signature against expected sessionSigner (or payer) address.
+ * Verifies EIP-712 Voucher signature against expected sessionSigner.
  */
 export async function verifyVoucherSignature(
   voucher: Voucher,
@@ -66,7 +66,8 @@ export async function verifyVoucherSignature(
 
 /**
  * Records and updates voucher state for a given session.
- * Guarantees monotonic cumulativeUnits increments.
+ * Binds immutable session identity (signer, recipient, contractAddress, chainId).
+ * Enforces monotonic cumulativeUnits increments.
  */
 export function updateSessionVoucher(
   sessionId: Hex,
@@ -76,9 +77,33 @@ export function updateSessionVoucher(
   chainId: number,
   voucher: Voucher
 ): { success: boolean; reason?: string } {
-  const existing = voucherStore.get(sessionId.toLowerCase());
+  const key = sessionId.toLowerCase();
+  const existing = voucherStore.get(key);
+
+  // Cross-session sanity check
+  if (voucher.sessionId.toLowerCase() !== key) {
+    return {
+      success: false,
+      reason: `Voucher sessionId mismatch: ${voucher.sessionId} !== expected ${sessionId}`,
+    };
+  }
 
   if (existing) {
+    // Immutable identity binding checks
+    if (existing.sessionSigner.toLowerCase() !== sessionSigner.toLowerCase()) {
+      return { success: false, reason: 'Session signer mismatch' };
+    }
+    if (existing.recipient.toLowerCase() !== recipient.toLowerCase()) {
+      return { success: false, reason: 'Recipient mismatch' };
+    }
+    if (existing.contractAddress.toLowerCase() !== contractAddress.toLowerCase()) {
+      return { success: false, reason: 'Contract address mismatch' };
+    }
+    if (existing.chainId !== chainId) {
+      return { success: false, reason: 'Chain ID mismatch' };
+    }
+
+    // Monotonicity check
     if (voucher.cumulativeUnits <= existing.highestCumulativeUnits) {
       return {
         success: false,
@@ -91,7 +116,7 @@ export function updateSessionVoucher(
     existing.lastUpdated = Date.now();
     existing.totalServedSegments += 1;
   } else {
-    voucherStore.set(sessionId.toLowerCase(), {
+    voucherStore.set(key, {
       sessionId,
       sessionSigner,
       recipient,
@@ -120,4 +145,3 @@ export function getLatestVoucher(sessionId: Hex): StoredSessionVoucher | undefin
 export function getAllVouchers(): StoredSessionVoucher[] {
   return Array.from(voucherStore.values());
 }
-

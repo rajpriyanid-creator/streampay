@@ -9,17 +9,41 @@ const PORT = process.env.PORT || 4001;
 app.use(cors());
 app.use(express.json());
 
-// ─── Demo Stream Manifest Definition ───────────────────────────
+// ─── Single-Use Token Store for Media Segment Delivery ────────────
+interface AccessTokenRecord {
+  sessionId: Hex;
+  segmentIndex: number;
+  expiresAt: number;
+}
+const accessTokenStore = new Map<string, AccessTokenRecord>();
+
+// Clean expired access tokens every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, record] of accessTokenStore.entries()) {
+    if (now > record.expiresAt) {
+      accessTokenStore.delete(token);
+    }
+  }
+}, 60000);
+
+// ─── Stream Manifest Definition ─────────────────────────────────
 interface StreamSegment {
   index: number;
-  durationUnits: number; // 2 seconds per unit
-  costUSDC: bigint; // USDC base units (6 decimals)
+  durationUnits: number;
+  costUSDC: bigint;
   cumulativeUnits: bigint;
   contentHash: Hex;
 }
 
 const SEGMENT_DURATION = 2; // seconds
 const UNITS_PER_SEGMENT = 2n;
+
+function hashPair(a: Hex, b: Hex): Hex {
+  const left = a.toLowerCase() < b.toLowerCase() ? a : b;
+  const right = a.toLowerCase() < b.toLowerCase() ? b : a;
+  return keccak256((`${left}${right.slice(2)}`) as Hex);
+}
 
 function createDemoManifest(streamId: string) {
   const segments: StreamSegment[] = [];
@@ -33,13 +57,13 @@ function createDemoManifest(streamId: string) {
     segments.push({
       index: i,
       durationUnits: SEGMENT_DURATION,
-      costUSDC: UNITS_PER_SEGMENT * 10000n, // 0.02 USDC
+      costUSDC: UNITS_PER_SEGMENT * 10000n, // 0.02 USDC per 2s segment
       cumulativeUnits: cumUnits,
       contentHash,
     });
   }
 
-  // Compute Merkle leaves & root matching Solidity segment leaf format
+  // Compute Merkle leaves & root matching Solidity contract format
   const leaves = segments.map((s) =>
     keccak256(
       encodeAbiParameters(
@@ -54,7 +78,7 @@ function createDemoManifest(streamId: string) {
 
   return {
     streamId,
-    title: 'Monad StreamPay HD Demo Video',
+    title: 'Monad StreamPay HD Demo Stream',
     totalSegments: segments.length,
     totalDurationSec: segments.length * SEGMENT_DURATION,
     unitPriceUSDC: '0.01',
@@ -79,13 +103,9 @@ function buildMerkleTree(leaves: Hex[]): Hex[][] {
     const nextLayer: Hex[] = [];
     for (let i = 0; i < currentLayer.length; i += 2) {
       if (i + 1 < currentLayer.length) {
-        const combined =
-          currentLayer[i] < currentLayer[i + 1]
-            ? (currentLayer[i] + currentLayer[i + 1].slice(2)) as Hex
-            : (currentLayer[i + 1] + currentLayer[i].slice(2)) as Hex;
-        nextLayer.push(keccak256(combined));
+        nextLayer.push(hashPair(currentLayer[i], currentLayer[i + 1]));
       } else {
-        nextLayer.push(currentLayer[i]);
+        nextLayer.push(hashPair(currentLayer[i], currentLayer[i]));
       }
     }
     layers.push(nextLayer);
@@ -105,6 +125,8 @@ function getMerkleProof(layers: Hex[][], index: number): Hex[] {
 
     if (pairIdx < layer.length) {
       proof.push(layer[pairIdx]);
+    } else {
+      proof.push(layer[currIdx]);
     }
     currIdx = Math.floor(currIdx / 2);
   }
@@ -211,7 +233,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 4. Update off-chain voucher store
+    // 4. Update off-chain voucher store (enforces session identity binding)
     const updateResult = updateSessionVoucher(
       sessionId as Hex,
       sessionSigner as Hex,
@@ -226,10 +248,16 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 5. Return authorized segment payload token
+    // 5. Issue single-use timed access token (60 seconds validity)
     const segmentToken = keccak256(
-      Buffer.from(`auth-token-${sessionId}-${segmentIndex}-${Date.now()}`)
-    );
+      Buffer.from(`auth-token-${sessionId}-${segmentIndex}-${Date.now()}-${Math.random()}`)
+    ) as Hex;
+
+    accessTokenStore.set(segmentToken, {
+      sessionId: sessionId as Hex,
+      segmentIndex: Number(segmentIndex),
+      expiresAt: Date.now() + 60000,
+    });
 
     res.json({
       success: true,
@@ -245,18 +273,56 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
   }
 });
 
-// ─── Gated Content Segment Delivery Route ────────────────────────
+// ─── Gated Content Segment Delivery Route with Token Validation ────
 app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Response) => {
   const { token } = req.query;
-  if (!token) {
+  if (!token || typeof token !== 'string') {
     res.status(401).json({ error: 'Unauthorized: Missing segment access token' });
     return;
   }
-  const segmentData = Buffer.from(`STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_TOKEN_${token}`);
+
+  const tokenRecord = accessTokenStore.get(token);
+  if (!tokenRecord) {
+    res.status(403).json({ error: 'Forbidden: Invalid or expired segment access token' });
+    return;
+  }
+
+  if (Date.now() > tokenRecord.expiresAt) {
+    accessTokenStore.delete(token);
+    res.status(403).json({ error: 'Forbidden: Segment access token has expired' });
+    return;
+  }
+
+  // Consume token (single-use pattern)
+  accessTokenStore.delete(token);
+
+  // Return binary media payload for segment
+  const segmentData = Buffer.from(
+    `STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_SESSION_${tokenRecord.sessionId}`
+  );
   res.setHeader('Content-Type', 'video/mp2t');
+  res.setHeader('Cache-Control', 'no-store, private');
   res.send(segmentData);
 });
 
+// ─── HLS Master Playlist Provider Route ───────────────────────────
+app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => {
+  const { streamId } = req.params;
+  if (!activeManifests.has(streamId)) {
+    activeManifests.set(streamId, createDemoManifest(streamId));
+  }
+  const manifest = activeManifests.get(streamId)!;
+
+  let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
+
+  for (let i = 0; i < manifest.segments.length; i++) {
+    playlist += `#EXTINF:2.0,\n/api/access/segment/${i}\n`;
+  }
+  playlist += '#EXT-X-ENDLIST\n';
+
+  res.setHeader('Content-Type', 'application/x-mpegURL');
+  res.send(playlist);
+});
 
 // ─── Latest Session Voucher Query (for merchant checkpointing) ──
 app.get('/api/session/latest-voucher/:sessionId', (req: Request, res: Response) => {
@@ -300,4 +366,3 @@ app.get('/api/vouchers', (_req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`🚀 StreamPay Access Service listening on http://localhost:${PORT}`);
 });
-

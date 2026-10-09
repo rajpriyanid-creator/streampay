@@ -1,0 +1,47 @@
+name: StreamPay CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Monorepo Dependencies
+        run: |
+          npm ci || npm install
+          npm run install:all
+
+      - name: TypeScript Check Access Service
+        run: |
+          cd access-service
+          npx tsc --noEmit
+
+      - name: TypeScript Check Frontend
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Build & Test Smart Contracts
+        run: |
+          cd contracts
+          forge build
+          forge test -vvv

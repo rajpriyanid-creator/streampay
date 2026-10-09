@@ -1,57 +1,42 @@
 /**
- * StreamPay Manifest Verification
- * Deterministic leaf encoding, Merkle proof verification using Keccak-256.
+ * StreamPay Unified Merkle Manifest Verification & Leaf Encoding
+ * Standardized Keccak-256 Merkle tree calculation matching Solidity contract.
  */
-import { keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
-
-const SEGMENT_LEAF_TYPEHASH = keccak256(
-  new TextEncoder().encode(
-    'StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)'
-  )
-);
+import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
 
 /**
- * Compute the leaf hash for a segment.
+ * Compute segment leaf hash matching Solidity contract:
+ * keccak256(abi.encode(uint32 segmentIndex, bytes32 contentHash, uint64 cumulativeUnits))
  */
 export function computeSegmentLeaf(params: {
-  schemaVersion: number;
-  contentIdHash: `0x${string}`;
   segmentIndex: number;
-  durationUnits: number;
-  renditionIdHash: `0x${string}`;
-  segmentSha256: `0x${string}`;
-}): `0x${string}` {
-  const encoded = encodeAbiParameters(
-    parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
-    [
-      SEGMENT_LEAF_TYPEHASH,
-      params.schemaVersion,
-      params.contentIdHash,
-      params.segmentIndex,
-      params.durationUnits,
-      params.renditionIdHash,
-      params.segmentSha256,
-    ]
+  contentHash: Hex;
+  cumulativeUnits: bigint;
+}): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      parseAbiParameters('uint32, bytes32, uint64'),
+      [params.segmentIndex, params.contentHash, params.cumulativeUnits]
+    )
   );
-  return keccak256(encoded);
 }
 
 /**
- * Hash two nodes in sorted order (OpenZeppelin Merkle tree convention).
+ * Hash two Merkle nodes in sorted lexicographical order.
  */
-export function hashPair(a: `0x${string}`, b: `0x${string}`): `0x${string}` {
-  // Sort lexicographically
-  const [left, right] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
-  return keccak256((`${left}${right.slice(2)}`) as `0x${string}`);
+export function hashPair(a: Hex, b: Hex): Hex {
+  const left = a.toLowerCase() < b.toLowerCase() ? a : b;
+  const right = a.toLowerCase() < b.toLowerCase() ? b : a;
+  return keccak256((`${left}${right.slice(2)}`) as Hex);
 }
 
 /**
- * Verify a Merkle proof for a leaf against a root.
+ * Verify a Merkle proof against a root hash.
  */
 export function verifyMerkleProof(
-  leaf: `0x${string}`,
-  proof: `0x${string}`[],
-  root: `0x${string}`
+  leaf: Hex,
+  proof: Hex[],
+  root: Hex
 ): boolean {
   let computedHash = leaf;
   for (const sibling of proof) {
@@ -61,38 +46,39 @@ export function verifyMerkleProof(
 }
 
 /**
- * Build a Merkle tree from leaves and return root + proofs.
+ * Build a deterministic Merkle tree from leaves with duplicate-last odd node pairing.
  */
-export function buildMerkleTree(leaves: `0x${string}`[]): {
-  root: `0x${string}`;
-  proofs: `0x${string}`[][];
+export function buildMerkleTree(leaves: Hex[]): {
+  root: Hex;
+  layers: Hex[][];
+  proofs: Hex[][];
 } {
   if (leaves.length === 0) {
-    return { root: '0x0000000000000000000000000000000000000000000000000000000000000000', proofs: [] };
+    return {
+      root: '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex,
+      layers: [[]],
+      proofs: [],
+    };
   }
 
   if (leaves.length === 1) {
-    return { root: leaves[0], proofs: [[]] };
+    return { root: leaves[0], layers: [[leaves[0]]], proofs: [[]] };
   }
 
-  // Store proofs for each leaf
-  const proofs: `0x${string}`[][] = leaves.map(() => []);
-
-  // Track which original leaf index maps to which current index
+  const proofs: Hex[][] = leaves.map(() => []);
   let currentLevel = [...leaves];
   let leafIndices = leaves.map((_, i) => [i]);
+  const layers: Hex[][] = [currentLevel];
 
   while (currentLevel.length > 1) {
-    const nextLevel: `0x${string}`[] = [];
+    const nextLevel: Hex[] = [];
     const nextIndices: number[][] = [];
 
     for (let i = 0; i < currentLevel.length; i += 2) {
       if (i + 1 < currentLevel.length) {
-        // Pair exists
         const hash = hashPair(currentLevel[i], currentLevel[i + 1]);
         nextLevel.push(hash);
 
-        // Add sibling to proofs
         for (const idx of leafIndices[i]) {
           proofs[idx].push(currentLevel[i + 1]);
         }
@@ -102,7 +88,7 @@ export function buildMerkleTree(leaves: `0x${string}`[]): {
 
         nextIndices.push([...leafIndices[i], ...leafIndices[i + 1]]);
       } else {
-        // Odd node - duplicate
+        // Odd node - pair with self
         const hash = hashPair(currentLevel[i], currentLevel[i]);
         nextLevel.push(hash);
 
@@ -114,19 +100,10 @@ export function buildMerkleTree(leaves: `0x${string}`[]): {
       }
     }
 
+    layers.push(nextLevel);
     currentLevel = nextLevel;
     leafIndices = nextIndices;
   }
 
-  return { root: currentLevel[0], proofs };
-}
-
-/**
- * Hash segment bytes with SHA-256 (for manifest verification).
- */
-export async function hashSegmentBytes(bytes: Uint8Array): Promise<`0x${string}`> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-  const hashArray = new Uint8Array(hashBuffer);
-  const hex = Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `0x${hex}` as `0x${string}`;
+  return { root: currentLevel[0], layers, proofs };
 }

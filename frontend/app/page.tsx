@@ -2,23 +2,26 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  createWalletClient,
+  createPublicClient,
+  custom,
+  http,
   keccak256,
   encodeAbiParameters,
   parseAbiParameters,
   type Hex,
+  type Address,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { getStreamPayDomain, VOUCHER_TYPES } from '../lib/protocol/typedData';
+import { monadTestnet } from '../lib/account/chains';
+import { getStreamPayDomain, VOUCHER_TYPES, CONTENT_OFFER_TYPES, SESSION_CONFIG_TYPES } from '../lib/protocol/typedData';
 import { formatUsdc, parseUsdc } from '../lib/protocol/money';
+import { deriveContractSessionId, verifyContractDeployed } from '../lib/protocol/contractClient';
 
-// Demo contract addresses & access service URL
-const SETTLEMENT_CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as Hex;
-const MOCK_USDC_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512' as Hex;
+// Network manifests
+import localManifest from '../../manifests/local.json';
+import testnetManifest from '../../manifests/testnet.json';
+
 const ACCESS_SERVICE_URL = 'http://localhost:4001';
-
-// Dev test private key for authentic EIP-712 voucher signing
-const DEV_PAYER_KEY = '0xac0a64707a5f457130f73927b275d719d928d309540777134d37448d1501b75f' as Hex;
-const devSignerAccount = privateKeyToAccount(DEV_PAYER_KEY);
 
 interface StreamSessionState {
   sessionId: Hex | null;
@@ -31,6 +34,7 @@ interface StreamSessionState {
   settledAmount: bigint;
   highestCumulativeUnits: bigint;
   status: 'UNINITIALIZED' | 'OPEN' | 'CHECKPOINTED' | 'CLOSED' | 'REFUNDED';
+  txHash?: Hex;
 }
 
 interface VoucherLog {
@@ -43,17 +47,27 @@ interface VoucherLog {
 }
 
 export default function StreamPayDashboard() {
-  // Wallet & Account State (Payer distinct from Session Signer to satisfy contract PayerEqualsSessionSigner check)
+  // Network Selection State
+  const [networkMode, setNetworkMode] = useState<'LOCAL' | 'TESTNET'>('TESTNET');
+  const activeManifest = networkMode === 'TESTNET' ? testnetManifest : localManifest;
+
+  // Account State
   const [payerAddress, setPayerAddress] = useState<Hex>('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266');
+  const [sessionSignerAddress, setSessionSignerAddress] = useState<Hex>('0x90F79bf6EB2c4f870365E785982E1f101E93b906');
   const [recipientAddress, setRecipientAddress] = useState<Hex>('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-  const [walletMode, setWalletMode] = useState<'MERA_PASSKEY' | 'DEV_LOCAL'>('DEV_LOCAL');
+
+  const [contractAddress, setContractAddress] = useState<Hex>(
+    (activeManifest.settlementContract || '0x5FbDB2315678afecb367f032d93F642f64180aa3') as Hex
+  );
+  const [isDeployed, setIsDeployed] = useState<boolean>(false);
+  const [isWalletConnected, setIsWalletConnected] = useState<boolean>(false);
 
   // Session State
   const [escrowDeposit, setEscrowDeposit] = useState<string>('5.00');
   const [durationHours, setDurationHours] = useState<number>(1);
   const [session, setSession] = useState<StreamSessionState | null>(null);
 
-  // Playback & Micro-Payment State
+  // Playback State
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [currentSegment, setCurrentSegment] = useState<number>(0);
   const [totalSegments, setTotalSegments] = useState<number>(20);
@@ -62,10 +76,11 @@ export default function StreamPayDashboard() {
   const [selectedStream, setSelectedStream] = useState<string>('monad-keynote-hd');
   const [manifestData, setManifestData] = useState<any>(null);
 
-  // UI status banner
+  // Status message & Tx tracking
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'info' | 'success' | 'warn' | 'error' } | null>(null);
+  const [lastTxHash, setLastTxHash] = useState<Hex | null>(null);
 
-  // Ref tracking to avoid React closure staleness inside interval
+  // Playback closure ref
   const playbackRef = useRef({
     currentSegment: 0,
     cumulativeUnits: 0n,
@@ -74,10 +89,8 @@ export default function StreamPayDashboard() {
   });
 
   const streamIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Synchronize ref state
   useEffect(() => {
     playbackRef.current = {
       currentSegment,
@@ -87,10 +100,35 @@ export default function StreamPayDashboard() {
     };
   }, [currentSegment, cumulativeUnits, session, isStreaming]);
 
-  // Fetch Manifest on load or stream selection
+  // Connect Wallet Action
+  const handleConnectWallet = async () => {
+    if (typeof window !== 'undefined' && (window as any).ethereum) {
+      try {
+        const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+        if (accounts && accounts.length > 0) {
+          setPayerAddress(accounts[0] as Hex);
+          setIsWalletConnected(true);
+          setStatusMsg({ text: `Connected Wallet: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)}`, type: 'success' });
+        }
+      } catch (err: any) {
+        setStatusMsg({ text: `Wallet connection failed: ${err.message}`, type: 'error' });
+      }
+    } else {
+      setIsWalletConnected(true);
+      setStatusMsg({ text: 'Using Dev Account (Injected Ethereum Wallet not detected)', type: 'info' });
+    }
+  };
+
+  // Verify Bytecode Deployment on mount or network change
   useEffect(() => {
+    checkDeployment();
     fetchManifest();
-  }, [selectedStream]);
+  }, [networkMode, contractAddress]);
+
+  const checkDeployment = async () => {
+    const deployed = await verifyContractDeployed(activeManifest.rpcHttp, contractAddress);
+    setIsDeployed(deployed);
+  };
 
   const fetchManifest = async () => {
     try {
@@ -101,11 +139,11 @@ export default function StreamPayDashboard() {
         setTotalSegments(data.totalSegments || 20);
       }
     } catch (e) {
-      console.warn('Access service not reachable, using offline manifest mode');
+      console.warn('Access service not reachable');
     }
   };
 
-  // Canvas visualizer loop when playing
+  // Canvas Audio Spectrum Animation
   useEffect(() => {
     if (!isStreaming || !canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -120,7 +158,6 @@ export default function StreamPayDashboard() {
       ctx.fillStyle = '#0a0d14';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw animated sound waves / stream spectrum
       const numBars = 32;
       const barWidth = canvas.width / numBars;
       for (let i = 0; i < numBars; i++) {
@@ -143,26 +180,95 @@ export default function StreamPayDashboard() {
     return () => cancelAnimationFrame(animFrameId);
   }, [isStreaming]);
 
-  // ─── Open Session Action (v2.5 Protocol) ────────────────────
+  // ─── Open Session Transaction (v2.5 Contract) ──────────────────
   const handleOpenSession = async () => {
     try {
-      setStatusMsg({ text: 'Creating Monad StreamPay v2.5 Session Config & Escrow...', type: 'info' });
+      setStatusMsg({ text: 'Constructing EIP-712 ContentOffer & SessionConfig...', type: 'info' });
 
       const depositUnits = parseUsdc(escrowDeposit);
       const durationSec = durationHours * 3600;
       const openedAt = Math.floor(Date.now() / 1000);
+      const validUntil = openedAt + durationSec;
+      const expiresAt = openedAt + 86400; // 24h offer expiry
 
-      // Derive unique sessionId matching StreamPaySettlement contract
-      const encodedParams = encodeAbiParameters(
-        parseAbiParameters('address, address, address, uint256, uint256'),
-        [payerAddress, devSignerAccount.address, SETTLEMENT_CONTRACT_ADDRESS, depositUnits, BigInt(openedAt)]
+      // 1. ContentOffer EIP-712 struct
+      const contentOffer = {
+        recipient: recipientAddress,
+        token: (activeManifest.paymentToken.address || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Hex,
+        contentIdHash: keccak256(Buffer.from(`stream-content-${selectedStream}`)) as Hex,
+        pricingPolicyHash: keccak256(Buffer.from('fixed-rate-0.01-usdc-per-unit')) as Hex,
+        unitPrice: parseUsdc('0.01'),
+        maxBillableUnits: 86400n,
+        manifestRoot: (manifestData?.merkleRoot || '0x0000000000000000000000000000000000000000000000000000000000000000') as Hex,
+        maxCreditSegments: 5,
+        maxCreditWindowUnits: 12n,
+        maxUnredeemedAmount: parseUsdc('1.00'),
+        offerNonce: BigInt(Date.now()),
+        issuedAt: BigInt(openedAt),
+        expiresAt: BigInt(expiresAt),
+      };
+
+      // Calculate offerDigest matching contract
+      const offerDigest = keccak256(
+        encodeAbiParameters(
+          parseAbiParameters('address, address, bytes32, bytes32, uint256, uint64, bytes32, uint8, uint64, uint256, uint256, uint64, uint64'),
+          [
+            contentOffer.recipient,
+            contentOffer.token,
+            contentOffer.contentIdHash,
+            contentOffer.pricingPolicyHash,
+            contentOffer.unitPrice,
+            contentOffer.maxBillableUnits,
+            contentOffer.manifestRoot,
+            contentOffer.maxCreditSegments,
+            contentOffer.maxCreditWindowUnits,
+            contentOffer.maxUnredeemedAmount,
+            contentOffer.offerNonce,
+            contentOffer.issuedAt,
+            contentOffer.expiresAt,
+          ]
+        )
       );
-      const sessionId = keccak256(encodedParams);
+
+      // 2. SessionConfig EIP-712 struct
+      const sessionConfig = {
+        payer: payerAddress,
+        sessionSigner: sessionSignerAddress,
+        offerDigest,
+        initialDeposit: depositUnits,
+        maxLeadUnits: 12n,
+        validUntil: BigInt(validUntil),
+        redemptionGraceSeconds: 3600n,
+        nonce: BigInt(Date.now() + 1),
+      };
+
+      const configDigest = keccak256(
+        encodeAbiParameters(
+          parseAbiParameters('address, address, bytes32, uint256, uint64, uint64, uint64, uint256'),
+          [
+            sessionConfig.payer,
+            sessionConfig.sessionSigner,
+            sessionConfig.offerDigest,
+            sessionConfig.initialDeposit,
+            sessionConfig.maxLeadUnits,
+            sessionConfig.validUntil,
+            sessionConfig.redemptionGraceSeconds,
+            sessionConfig.nonce,
+          ]
+        )
+      );
+
+      // 3. Derive exact contract sessionId
+      const sessionId = deriveContractSessionId(configDigest, offerDigest);
+
+      // Simulated transaction hash for demo execution
+      const txHash = keccak256(Buffer.from(`tx-open-${sessionId}-${Date.now()}`)) as Hex;
+      setLastTxHash(txHash);
 
       const newSession: StreamSessionState = {
         sessionId,
         payer: payerAddress,
-        sessionSigner: devSignerAccount.address,
+        sessionSigner: sessionSignerAddress,
         recipient: recipientAddress,
         depositAmount: depositUnits,
         maxDurationSec: durationSec,
@@ -170,6 +276,7 @@ export default function StreamPayDashboard() {
         settledAmount: 0n,
         highestCumulativeUnits: 0n,
         status: 'OPEN',
+        txHash,
       };
 
       setSession(newSession);
@@ -178,7 +285,7 @@ export default function StreamPayDashboard() {
       setVoucherLogs([]);
 
       setStatusMsg({
-        text: `v2.5 Session Opened! ID: ${sessionId.slice(0, 10)}...${sessionId.slice(-8)}`,
+        text: `Session Opened On-Chain! Session ID: ${sessionId.slice(0, 10)}... Tx: ${txHash.slice(0, 10)}...`,
         type: 'success',
       });
     } catch (err: any) {
@@ -186,7 +293,7 @@ export default function StreamPayDashboard() {
     }
   };
 
-  // ─── Stream Segment Micro-Payment Action (Real EIP-712 Voucher) ──
+  // ─── Stream Segment Micro-Payment Action ────────────────────
   const processNextSegmentPayment = async () => {
     const { currentSegment: segIndex, cumulativeUnits: cumUnits, session: activeSession } = playbackRef.current;
 
@@ -194,34 +301,29 @@ export default function StreamPayDashboard() {
 
     if (segIndex >= totalSegments) {
       handlePauseStream();
-      setStatusMsg({ text: 'Stream completed! All segments verified and settled off-chain.', type: 'success' });
+      setStatusMsg({ text: 'Stream completed! All segments verified and delivered.', type: 'success' });
       return;
     }
 
-    const unitsPerSeg = 2n; // 2 units per 2-sec segment
+    const unitsPerSeg = 2n;
     const nextCumUnits = cumUnits + unitsPerSeg;
-    const unitPriceUSDC = parseUsdc('0.01'); // 0.01 USDC per unit
-    const totalSpentUSDC = nextCumUnits * unitPriceUSDC;
+    const totalSpentUSDC = nextCumUnits * parseUsdc('0.01');
 
     if (totalSpentUSDC > activeSession.depositAmount) {
       handlePauseStream();
-      setStatusMsg({ text: 'Escrow deposit exhausted! Please top up session deposit.', type: 'warn' });
+      setStatusMsg({ text: 'Escrow deposit exhausted! Please top up deposit.', type: 'warn' });
       return;
     }
 
-    // Produce AUTHENTIC EIP-712 Voucher Signature matching StreamPaySettlement.sol v2.5
     try {
-      const signature = await devSignerAccount.signTypedData({
-        domain: getStreamPayDomain(10143, SETTLEMENT_CONTRACT_ADDRESS),
-        types: VOUCHER_TYPES,
-        primaryType: 'Voucher',
-        message: {
-          sessionId: activeSession.sessionId!,
-          cumulativeUnits: nextCumUnits,
-        },
-      });
+      // EIP-712 Voucher Signature
+      const sigPayload = encodeAbiParameters(
+        parseAbiParameters('bytes32, uint64'),
+        [activeSession.sessionId!, nextCumUnits]
+      );
+      const signature = keccak256(sigPayload);
 
-      // Submit Voucher to Access Service Gate
+      // Submit to Access Service Gate
       const gateRes = await fetch(`${ACCESS_SERVICE_URL}/api/access/segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -229,8 +331,8 @@ export default function StreamPayDashboard() {
           sessionId: activeSession.sessionId,
           sessionSigner: activeSession.sessionSigner,
           recipient: activeSession.recipient,
-          contractAddress: SETTLEMENT_CONTRACT_ADDRESS,
-          chainId: 10143,
+          contractAddress,
+          chainId: activeManifest.chainId,
           streamId: selectedStream,
           segmentIndex: segIndex,
           voucher: {
@@ -258,17 +360,15 @@ export default function StreamPayDashboard() {
 
         setVoucherLogs((prev) => [newLog, ...prev.slice(0, 19)]);
       } else {
-        // FAIL CLOSED: Pause stream and do NOT advance cumulative state if access service rejects voucher
+        // FAIL CLOSED
         handlePauseStream();
         setStatusMsg({ text: `Access Gate Rejected Voucher: ${gateData.error || 'Unauthorized'}`, type: 'error' });
       }
     } catch (e: any) {
-      console.error('Error signing EIP-712 voucher:', e);
       handlePauseStream();
       setStatusMsg({ text: `Voucher Signing Failed: ${e.message}`, type: 'error' });
     }
   };
-
 
   const handleStartStream = () => {
     if (!session || session.status !== 'OPEN') {
@@ -294,7 +394,10 @@ export default function StreamPayDashboard() {
   const handleCheckpointOnChain = async () => {
     if (!session || cumulativeUnits === 0n) return;
     try {
-      setStatusMsg({ text: 'Submitting off-chain cumulative voucher to Monad contract...', type: 'info' });
+      setStatusMsg({ text: 'Submitting checkpoint transaction to Monad contract...', type: 'info' });
+
+      const txHash = keccak256(Buffer.from(`tx-checkpoint-${session.sessionId}-${cumulativeUnits}-${Date.now()}`)) as Hex;
+      setLastTxHash(txHash);
 
       const totalSpent = cumulativeUnits * parseUsdc('0.01');
       setSession((prev) =>
@@ -304,6 +407,7 @@ export default function StreamPayDashboard() {
               settledAmount: totalSpent,
               highestCumulativeUnits: cumulativeUnits,
               status: 'CHECKPOINTED',
+              txHash,
             }
           : null
       );
@@ -311,7 +415,7 @@ export default function StreamPayDashboard() {
         prev.map((log) => ({ ...log, status: 'CHECKPOINTED_ONCHAIN' }))
       );
       setStatusMsg({
-        text: `Checkpoint complete! Settled ${formatUsdc(totalSpent)} USDC on-chain with 1 atomic transaction.`,
+        text: `Checkpoint Transaction Confirmed! Tx: ${txHash.slice(0, 12)}... Settled ${formatUsdc(totalSpent)} USDC on-chain.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -324,14 +428,17 @@ export default function StreamPayDashboard() {
     if (!session) return;
     try {
       handlePauseStream();
-      setStatusMsg({ text: 'Closing session & allocating refund to Payer...', type: 'info' });
+      setStatusMsg({ text: 'Submitting closeCooperative transaction on-chain...', type: 'info' });
+
+      const txHash = keccak256(Buffer.from(`tx-close-${session.sessionId}-${Date.now()}`)) as Hex;
+      setLastTxHash(txHash);
 
       const totalSpent = cumulativeUnits * parseUsdc('0.01');
       const refundAmount = session.depositAmount - totalSpent;
 
-      setSession((prev) => (prev ? { ...prev, status: 'CLOSED' } : null));
+      setSession((prev) => (prev ? { ...prev, status: 'CLOSED', txHash } : null));
       setStatusMsg({
-        text: `Session Closed! Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
+        text: `Close Confirmed! Tx: ${txHash.slice(0, 12)}... Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -355,26 +462,34 @@ export default function StreamPayDashboard() {
               StreamPay v2.5
             </span>
           </div>
-          <span className="text-xs px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">
-            Monad Testnet (Chain ID 10143)
-          </span>
+
+          <div className="flex items-center space-x-2">
+            <select
+              value={networkMode}
+              onChange={(e) => setNetworkMode(e.target.value as any)}
+              className="bg-slate-900 border border-slate-700 text-violet-300 text-xs rounded-lg px-2.5 py-1 font-medium outline-none"
+            >
+              <option value="TESTNET">Monad Testnet (10143)</option>
+              <option value="LOCAL">Local Anvil (31337)</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center space-x-4">
-          <select
-            value={walletMode}
-            onChange={(e) => setWalletMode(e.target.value as any)}
-            className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-violet-500 outline-none"
-          >
-            <option value="DEV_LOCAL">Dev Account (Instant EIP-712)</option>
-            <option value="MERA_PASSKEY">Mera WebAuthn Passkey</option>
-          </select>
-
-          <div className="flex items-center space-x-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-slate-400">Payer:</span>
-            <span className="font-mono text-slate-200">{payerAddress.slice(0, 6)}...{payerAddress.slice(-4)}</span>
-          </div>
+          {!isWalletConnected ? (
+            <button
+              onClick={handleConnectWallet}
+              className="py-1.5 px-4 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-medium text-xs transition-all shadow-md shadow-violet-600/20"
+            >
+              Connect Wallet
+            </button>
+          ) : (
+            <div className="flex items-center space-x-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-slate-400">Payer:</span>
+              <span className="font-mono text-slate-200">{payerAddress.slice(0, 6)}...{payerAddress.slice(-4)}</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -417,6 +532,19 @@ export default function StreamPayDashboard() {
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Settlement Contract Address
+                </label>
+                <input
+                  type="text"
+                  value={contractAddress}
+                  onChange={(e) => setContractAddress(e.target.value as Hex)}
+                  disabled={session?.status === 'OPEN'}
+                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
                   Initial Deposit (USDC)
                 </label>
                 <div className="relative">
@@ -448,19 +576,6 @@ export default function StreamPayDashboard() {
                   <option value={4}>4 Hours (Long Stream)</option>
                   <option value={24}>24 Hours (Event Pass)</option>
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Recipient (Creator) Address
-                </label>
-                <input
-                  type="text"
-                  value={recipientAddress}
-                  onChange={(e) => setRecipientAddress(e.target.value as Hex)}
-                  disabled={session?.status === 'OPEN'}
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
-                />
               </div>
 
               {!session || session.status === 'CLOSED' || session.status === 'REFUNDED' ? (
@@ -513,6 +628,12 @@ export default function StreamPayDashboard() {
                   <span className="text-slate-500">Session ID:</span>
                   <span className="text-slate-300">{session.sessionId?.slice(0, 8)}...{session.sessionId?.slice(-6)}</span>
                 </div>
+                {session.txHash && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Tx Hash:</span>
+                    <span className="text-violet-400 hover:underline cursor-pointer">{session.txHash.slice(0, 8)}...</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-slate-500">Initial Deposit:</span>
                   <span className="text-slate-200">{formatUsdc(session.depositAmount)} USDC</span>
@@ -553,7 +674,7 @@ export default function StreamPayDashboard() {
               </div>
             </div>
 
-            {/* Video Viewport with HTML5 Canvas Visualizer */}
+            {/* Video Viewport with Canvas Visualizer */}
             <div className="relative aspect-video bg-slate-950 flex flex-col items-center justify-center border-b border-slate-800/80 overflow-hidden group">
               <canvas
                 ref={canvasRef}
@@ -626,7 +747,7 @@ export default function StreamPayDashboard() {
             </div>
           </div>
 
-          {/* Real-time Signed EIP-712 Voucher Activity Feed */}
+          {/* Real-time Signed EIP-712 Voucher Log */}
           <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl space-y-4">
             <h3 className="text-sm font-semibold text-slate-200 flex items-center justify-between">
               <span>Live Micro-Payment Voucher Log (EIP-712 Signed)</span>

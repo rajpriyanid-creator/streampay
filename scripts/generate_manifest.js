@@ -1,26 +1,32 @@
 /**
- * StreamPay Merkle Manifest Generator Utility
+ * StreamPay Unified Merkle Manifest Generator Utility
  * Generates sample segment manifests with deterministic Keccak-256 Merkle trees.
  */
 const { keccak256, encodeAbiParameters, parseAbiParameters } = require('viem');
 const fs = require('fs');
 const path = require('path');
 
-function generateManifest(streamId, segmentCount, costPerSegmentUSDC) {
+function hashPair(a, b) {
+  const left = a.toLowerCase() < b.toLowerCase() ? a : b;
+  const right = a.toLowerCase() < b.toLowerCase() ? b : a;
+  return keccak256(`${left}${right.slice(2)}`);
+}
+
+function generateManifest(streamId, segmentCount, unitsPerSegment) {
   const segments = [];
-  let cumulativeCost = 0n;
-  const costUnits = BigInt(Math.floor(costPerSegmentUSDC * 1_000_000));
+  let cumulativeUnits = 0n;
+  const UNITS_PER_SEG = BigInt(unitsPerSegment);
 
   for (let i = 0; i < segmentCount; i++) {
-    cumulativeCost += costUnits;
+    cumulativeUnits += UNITS_PER_SEG;
     const contentHash = keccak256(
       Buffer.from(`streampay-segment-content-${streamId}-${i}`)
     );
     segments.push({
       index: i,
-      durationSec: 2,
-      costUSDC: costUnits.toString(),
-      cumulativeCost: cumulativeCost.toString(),
+      durationUnits: Number(UNITS_PER_SEG),
+      costUSDC: (UNITS_PER_SEG * 10000n).toString(), // 0.01 USDC per unit
+      cumulativeUnits: cumulativeUnits.toString(),
       contentHash,
     });
   }
@@ -29,8 +35,8 @@ function generateManifest(streamId, segmentCount, costPerSegmentUSDC) {
   const leaves = segments.map((s) =>
     keccak256(
       encodeAbiParameters(
-        parseAbiParameters('uint32, bytes32, uint256'),
-        [s.index, s.contentHash, BigInt(s.cumulativeCost)]
+        parseAbiParameters('uint32, bytes32, uint64'),
+        [s.index, s.contentHash, BigInt(s.cumulativeUnits)]
       )
     )
   );
@@ -42,13 +48,9 @@ function generateManifest(streamId, segmentCount, costPerSegmentUSDC) {
     const nextLayer = [];
     for (let i = 0; i < currentLayer.length; i += 2) {
       if (i + 1 < currentLayer.length) {
-        const combined =
-          currentLayer[i] < currentLayer[i + 1]
-            ? currentLayer[i] + currentLayer[i + 1].slice(2)
-            : currentLayer[i + 1] + currentLayer[i].slice(2);
-        nextLayer.push(keccak256(combined));
+        nextLayer.push(hashPair(currentLayer[i], currentLayer[i + 1]));
       } else {
-        nextLayer.push(currentLayer[i]);
+        nextLayer.push(hashPair(currentLayer[i], currentLayer[i]));
       }
     }
     treeLayers.push(nextLayer);
@@ -61,14 +63,14 @@ function generateManifest(streamId, segmentCount, costPerSegmentUSDC) {
     streamId,
     title: `StreamPay Stream ${streamId}`,
     totalSegments: segmentCount,
-    totalDurationSec: segmentCount * 2,
-    pricePerSegmentUSDC: costPerSegmentUSDC.toString(),
+    totalDurationSec: segmentCount * Number(UNITS_PER_SEG),
+    unitPriceUSDC: '0.01',
     merkleRoot,
     segments,
   };
 }
 
-const manifest = generateManifest('monad-keynote-hd', 20, 0.01);
+const manifest = generateManifest('monad-keynote-hd', 20, 2);
 const outPath = path.join(__dirname, '../manifests/demo_stream.json');
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
