@@ -1,0 +1,150 @@
+{
+  "streamId": "monad-keynote-hd",
+  "title": "StreamPay Stream monad-keynote-hd",
+  "totalSegments": 20,
+  "totalDurationSec": 40,
+  "pricePerSegmentUSDC": "0.01",
+  "merkleRoot": "0xb1d2fadd973ea6bff18c075b02d1f092b3f93c1a1a1f733b98f4c786b585ea94",
+  "segments": [
+    {
+      "index": 0,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "10000",
+      "contentHash": "0x29e40401e82b538d725d605da1b1a807d87ec51118e82bc79bd354a728d13609"
+    },
+    {
+      "index": 1,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "20000",
+      "contentHash": "0xf0c4fc9027e7539c6c74e5d23285e82dede2e3122a0e58bcc6245ff61c102a1c"
+    },
+    {
+      "index": 2,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "30000",
+      "contentHash": "0x69ad24485555821fc93f4c46806e486df8299db7b2c0c4d0606a3abe80f0cf3b"
+    },
+    {
+      "index": 3,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "40000",
+      "contentHash": "0xf32e1bff452747708de2635e93233989b8604d5e124f01052bb52d9f0256ecac"
+    },
+    {
+      "index": 4,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "50000",
+      "contentHash": "0x1863ce5cf3708ea6e9c9a50f078d5d308632e46a9040dd98a0a31954e18807e2"
+    },
+    {
+      "index": 5,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "60000",
+      "contentHash": "0xe2315ee83a9a6908382f2a5d196f65220310d34b9581b567bb9efa1af3410f46"
+    },
+    {
+      "index": 6,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "70000",
+      "contentHash": "0x7c96f7e5fc7cc05ddabb6ff7d7eed622acb4ebbbb6d73ff28096c595c1d62a60"
+    },
+    {
+      "index": 7,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "80000",
+      "contentHash": "0x33db3a612262d4ca8ccd320e3c0d9e27acdcf2ed56cf4db4c8b0933b3521930f"
+    },
+    {
+      "index": 8,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "90000",
+      "contentHash": "0x0c0768456b422ff4e193118d1ba8cdfe56333089d49181fa607cde1a2382e0ea"
+    },
+    {
+      "index": 9,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "100000",
+      "contentHash": "0x1494538969ba8904485af43e05ce296a8e700583bc2bd2da0c6fdde6619aad24"
+    },
+    {
+      "index": 10,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "110000",
+      "contentHash": "0x60922e2f030056d93eb92190f9bb7d2b53d8ded67e6f62da008eec218ce79653"
+    },
+    {
+      "index": 11,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "120000",
+      "contentHash": "0xb6ce3d66edb525a0d485e1d85da626cc6d7a26071aa1debb0ddfab5c5cae8461"
+    },
+    {
+      "index": 12,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "130000",
+      "contentHash": "0x12b3a8da5bd4d02054527ca40b0c7309362e4757b8f6adbbdad844b5d97be628"
+    },
+    {
+      "index": 13,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "140000",
+      "contentHash": "0x59d7b88a0a812d2810d0cb9de3e78787d89cd9db8564cc2a2152b95c500160d4"
+    },
+    {
+      "index": 14,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "150000",
+      "contentHash": "0x72e28b49ac130cc0d3d83052419984588087f018ca0aa75ec56c8f2b16b16f80"
+    },
+    {
+      "index": 15,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "160000",
+      "contentHash": "0x70e10200c804c6740cf43538e74c891b5411b08c1fe4c3ce43f9e1dfea0484dd"
+    },
+    {
+      "index": 16,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "170000",
+      "contentHash": "0xa2020cd805a9ef7cfd999b4ccec6f4a59c061168360844287895c3e600dc6e20"
+    },
+    {
+      "index": 17,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "180000",
+      "contentHash": "0xf8b80ae99023b5f368cd371e499678a56f25da831210d9cd8f7aae89896dcfe5"
+    },
+    {
+      "index": 18,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "190000",
+      "contentHash": "0x9a14003205a3f305484a7e1560ddd39aa461ba7d4b8a13101183775504d23010"
+    },
+    {
+      "index": 19,
+      "durationSec": 2,
+      "costUSDC": "10000",
+      "cumulativeCost": "200000",
+      "contentHash": "0x3ddd3f2d0feaaf70ba77ec3113568b798022bdb886570acc1473af633ef4f8cb"
+    }
+  ]
+}

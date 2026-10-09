@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "network": "local",
+  "chainId": 31337,
+  "rpcHttp": "http://127.0.0.1:8545",
+  "rpcWs": "ws://127.0.0.1:8545",
+  "explorers": [],
+  "paymentToken": {
+    "symbol": "USDC",
+    "address": null,
+    "expectedDecimals": 6,
+    "source": "Local mock deployment"
+  },
+  "settlementContract": null,
+  "deploymentTxHash": null,
+  "deploymentBlock": null,
+  "abiVersion": "streampay-v1",
+  "eip712Name": "StreamPay",
+  "eip712Version": "2"
+}

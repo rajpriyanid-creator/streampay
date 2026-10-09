@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "network": "monad-testnet",
+  "chainId": 10143,
+  "rpcHttp": "https://testnet-rpc.monad.xyz",
+  "rpcWs": "wss://testnet-rpc.monad.xyz",
+  "explorers": [
+    "https://testnet.monadvision.com",
+    "https://testnet.monadscan.com"
+  ],
+  "paymentToken": {
+    "symbol": "USDC",
+    "address": "0x534b2f3A21130d7a60830c2Df862319e593943A3",
+    "expectedDecimals": 6,
+    "source": "Circle official announcement"
+  },
+  "settlementContract": null,
+  "deploymentTxHash": null,
+  "deploymentBlock": null,
+  "abiVersion": "streampay-v1",
+  "eip712Name": "StreamPay",
+  "eip712Version": "2"
+}

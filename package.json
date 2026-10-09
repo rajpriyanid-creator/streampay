@@ -1,0 +1,15 @@
+{
+  "name": "streampay-monad-suite",
+  "version": "2.5.0",
+  "private": true,
+  "description": "StreamPay Monad Bounded Escrow Pay-Per-Use Video Streaming Platform",
+  "scripts": {
+    "install:all": "npm install --prefix access-service && npm install --prefix frontend",
+    "dev:access": "npm run dev --prefix access-service",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "generate-manifest": "node scripts/generate_manifest.js"
+  },
+  "dependencies": {
+    "viem": "^2.9.0"
+  }
+}
