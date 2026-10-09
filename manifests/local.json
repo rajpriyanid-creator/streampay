@@ -14,7 +14,8 @@
   "settlementContract": null,
   "deploymentTxHash": null,
   "deploymentBlock": null,
-  "abiVersion": "streampay-v1",
-  "eip712Name": "StreamPay",
-  "eip712Version": "2"
+  "abiVersion": "streampay-v2.5",
+  "eip712Name": "StreamPaySettlement",
+  "eip712Version": "2.5"
 }
+

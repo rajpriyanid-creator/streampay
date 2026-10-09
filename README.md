@@ -1,31 +1,32 @@
 # StreamPay — Monad Pay-Per-Use Video Streaming Platform (v2.5)
 
-StreamPay is a production-ready, high-throughput micro-payment platform engineered specifically for **Monad Testnet (Chain ID 10143)**. It enables sub-cent, pay-per-second video streaming using bounded escrows and off-chain EIP-712 signed micro-vouchers.
+StreamPay is a high-throughput micro-payment streaming platform engineered specifically for **Monad Testnet (Chain ID 10143)**. It enables sub-cent, pay-per-second media streaming using bounded escrows and off-chain EIP-712 signed cumulative vouchers.
 
 ---
 
-## 🌟 Key Architecture & Protocol Highlights
+## 🌟 Key Architecture & Protocol Highlights (v2.5)
 
-1. **Bounded Escrow Channels (`StreamPaySettlement.sol`)**:
-   - Payers open streaming channels by depositing USDC into bounded escrows with defined durations.
-   - Nonces and cumulative amounts increase monotonically, preventing replay and double-spending.
+1. **Bounded Escrow Sessions (`StreamPaySettlement.sol`)**:
+   - Payers sign EIP-712 `SessionConfig` binding initial deposit, validity duration, and session signer key.
+   - Creators sign EIP-712 `ContentOffer` binding content hash, pricing policy, and manifest root.
+   - Nonces and cumulative units increase monotonically, preventing replay and double-spending.
 
 2. **Off-Chain EIP-712 Micro-Vouchers**:
-   - Payers sign off-chain EIP-712 vouchers for every video segment served.
+   - Payers sign off-chain EIP-712 `Voucher(bytes32 sessionId, uint64 cumulativeUnits)` for every video segment served.
    - Zero gas fees incurred during streaming playback.
 
 3. **Merkle-Verified Segment Manifests**:
-   - Streams are divided into segments with deterministic Keccak-256 Merkle leaf proofs matching `keccak256(abi.encode(segmentIndex, contentHash, cumulativeCost))`.
+   - Streams are divided into segments with deterministic Keccak-256 Merkle leaf proofs matching `keccak256(abi.encode(segmentIndex, contentHash, cumulativeUnits))`.
    - Access gate verifies signatures and proofs before delivering video content.
 
 4. **Gas-Optimized On-Chain Checkpointing**:
-   - Merchants submit only the latest valid voucher to settle earnings on-chain in a single transaction, batching hundreds of off-chain payments.
+   - Creators submit only the latest valid voucher to settle earnings on-chain in a single transaction, batching hundreds of off-chain payments.
 
-5. **Dispute Window & Fallback Credit**:
-   - Protects merchants and payers against invalid transfer reverts or non-responsive parties.
+5. **Dispute Window & Push-with-Pull-Fallback**:
+   - Unilateral closure starts a `CHALLENGE_SECONDS` window (15 mins). Failed transfers automatically become claimable credits.
 
 6. **Emergency Auto-Refund**:
-   - After channel expiration, payers can reclaim unspent escrowed funds directly.
+   - After redemption grace timeout, payers can reclaim unspent escrowed funds directly.
 
 ---
 
@@ -35,36 +36,35 @@ StreamPay is a production-ready, high-throughput micro-payment platform engineer
 streampay/
 ├── contracts/
 │   ├── src/
-│   │   ├── StreamPaySettlement.sol     # Core settlement smart contract
+│   │   ├── StreamPaySettlement.sol     # Core settlement smart contract (v2.5)
 │   │   └── mocks/
 │   │       ├── MockUSDC.sol            # 6-decimal USDC mock token
-│   │       └── MockBadToken.sol        # Failure simulation token
+      │       └── MockBadToken.sol        # Failure simulation token
 │   ├── test/
-│   │   └── StreamPaySettlement.t.sol   # Foundry test suite (fuzz, attack & boundary tests)
+│   │   └── StreamPaySettlement.t.sol   # Comprehensive Foundry test suite
 │   ├── script/
-│   │   └── Deploy.s.sol                # Deployment script
+│   │   └── Deploy.s.sol                # Monad deployment script
 │   └── foundry.toml                    # Solidity compiler & optimizer config
 ├── access-service/
 │   ├── src/
-│   │   ├── server.ts                   # Gated Express HTTP server & manifest provider
-│   │   └── voucherStore.ts             # EIP-712 signature verification & voucher storage
+│   │   ├── server.ts                   # Gated Express HTTP server & manifest provider (Port 4001)
+│   │   └── voucherStore.ts             # EIP-712 signature verification & session store
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx                    # Pay-Per-Use Streaming Dashboard & Player UI
+│   │   ├── page.tsx                    # Pay-Per-Use Dashboard & Video Canvas UI
 │   │   ├── layout.tsx                  # Root layout & font setup
-│   │   └── globals.css                 # Premium dark theme styling
+│   │   └── globals.css                 # Dark theme styling
 │   ├── lib/
-│   │   ├── account/                    # Dev Account & Mera Passkey WebAuthn interface
+│   │   ├── account/                    # Account provider & Monad chain config
 │   │   ├── hls/                        # Custom HLS.js fragment loader
 │   │   └── protocol/                   # Shared EIP-712 typed data & money arithmetic
 │   ├── package.json
 │   └── tsconfig.json
 ├── manifests/
-│   └── demo_stream.json                # Pre-generated Merkle stream manifest
-├── scripts/
-│   └── generate_manifest.js            # Merkle manifest generator
+│   ├── local.json                      # Local testnet configuration
+│   └── testnet.json                    # Monad testnet deployment config
 └── package.json                        # Monorepo management scripts
 ```
 
@@ -81,21 +81,16 @@ npm install
 npm run install:all
 ```
 
-### 2. Generate Stream Manifest
-```bash
-npm run generate-manifest
-```
-
-### 3. Run Access Gate Service
+### 2. Run Access Gate Service
 ```bash
 npm run dev:access
-# Server will start on http://localhost:4000
+# Service runs on http://localhost:4001
 ```
 
-### 4. Run Frontend App
+### 3. Run Frontend App
 ```bash
 npm run dev:frontend
-# App will launch on http://localhost:3000
+# App runs on http://localhost:3000
 ```
 
 ---
@@ -108,24 +103,13 @@ forge build
 forge test -vvv
 ```
 
-### Covered Test Scenarios:
-- **`test_OpenChannel`**: Verifies deposit lock and state initialization.
-- **`test_CheckpointVoucher`**: Verifies valid voucher submission and transfer to merchant.
-- **`test_CloseChannel_ByMerchant`**: Verifies final settlement and remainder refund to payer.
-- **`test_CloseChannel_ByPayer`**: Verifies co-signed closure by payer.
-- **`test_EmergencyRefund_AfterExpiry`**: Verifies automatic refund after max duration timeout.
-- **`testRevert_StaleVoucherNonce`**: Ensures non-monotonic nonces are rejected.
-- **`testRevert_InvalidSignature`**: Ensures forged signatures revert.
-- **`testRevert_ReplayAttack`**: Ensures cross-channel voucher replay attempts fail.
-- **`testFuzz_ArbitraryAmounts`**: Fuzz testing across random deposit amounts and nonces.
-
 ---
 
-## 🛡️ Security Audit Checklist
+## 🛡️ Protocol Security Verification
 
-- [x] Reentrancy Protection (`ReentrancyGuardUpgradeable`)
-- [x] Exact EIP-712 Domain Separator & Typehash Validation
-- [x] Monotonic Nonce & Cumulative Amount Constraints
-- [x] Safe ERC-20 Transfers (`SafeERC20`)
-- [x] Overflow Protection (Solidity ^0.8.26 default checked arithmetic)
-- [x] Strict Expiry Constraints (`openedAt + maxDurationSec`)
+- [x] EIP-712 Typed Data Verification (`StreamPaySettlement`, version `2.5`)
+- [x] Monotonic `cumulativeUnits` Increments & Replay Defense
+- [x] Elapsed-Plus-Lead Bound Enforcement (`cumulativeUnits <= elapsed + maxLeadUnits`)
+- [x] Reentrancy Guard Protection (`ReentrancyGuard`)
+- [x] Push-with-Pull Fallback Payouts (`claimable` mapping)
+

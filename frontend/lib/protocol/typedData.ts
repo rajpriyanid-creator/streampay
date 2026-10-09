@@ -7,17 +7,19 @@
 // ─── Domain ──────────────────────────────────────────────────────────
 
 export const STREAMPAY_DOMAIN = {
-  name: 'StreamPay',
-  version: '2',
+  name: 'StreamPaySettlement',
+  version: '2.5',
 } as const;
 
 export function getStreamPayDomain(chainId: number, verifyingContract: string) {
   return {
-    ...STREAMPAY_DOMAIN,
-    chainId,
-    verifyingContract,
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(chainId),
+    verifyingContract: verifyingContract as `0x${string}`,
   };
 }
+
 
 // ─── ContentOffer ────────────────────────────────────────────────────
 

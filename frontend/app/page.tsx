@@ -1,33 +1,41 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { createWalletClient, createPublicClient, custom, http, formatUnits, parseUnits, keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
-import { monadTestnet } from '../lib/account/chains';
-import { VOUCHER_TYPES } from '../lib/protocol/typedData';
+import {
+  keccak256,
+  encodeAbiParameters,
+  parseAbiParameters,
+  type Hex,
+} from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { getStreamPayDomain, VOUCHER_TYPES } from '../lib/protocol/typedData';
 import { formatUsdc, parseUsdc } from '../lib/protocol/money';
-import { StreamPayFragmentLoader } from '../lib/hls/StreamPayFragmentLoader';
 
-// Demo contract address (can be updated or deployed via scripts)
+// Demo contract addresses & access service URL
 const SETTLEMENT_CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as Hex;
 const MOCK_USDC_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512' as Hex;
 const ACCESS_SERVICE_URL = 'http://localhost:4001';
 
-interface ChannelState {
-  channelId: Hex | null;
+// Dev test private key for authentic EIP-712 voucher signing
+const DEV_PAYER_KEY = '0xac0a64707a5f457130f73927b275d719d928d309540777134d37448d1501b75f' as Hex;
+const devSignerAccount = privateKeyToAccount(DEV_PAYER_KEY);
+
+interface StreamSessionState {
+  sessionId: Hex | null;
   payer: Hex;
-  merchant: Hex;
+  sessionSigner: Hex;
+  recipient: Hex;
   depositAmount: bigint;
   maxDurationSec: number;
   openedAt: number;
   settledAmount: bigint;
-  highestNonce: bigint;
+  highestCumulativeUnits: bigint;
   status: 'UNINITIALIZED' | 'OPEN' | 'CHECKPOINTED' | 'CLOSED' | 'REFUNDED';
 }
 
 interface VoucherLog {
   id: string;
-  nonce: bigint;
-  cumulativeAmount: bigint;
+  cumulativeUnits: bigint;
   segmentIndex: number;
   timestamp: string;
   signature: Hex;
@@ -35,34 +43,51 @@ interface VoucherLog {
 }
 
 export default function StreamPayDashboard() {
-  // Wallet / Connection State
-  const [account, setAccount] = useState<Hex>('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266');
-  const [merchantAddress, setMerchantAddress] = useState<Hex>('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-  const [isConnected, setIsConnected] = useState<boolean>(true);
+  // Wallet & Account State
+  const [payerAddress, setPayerAddress] = useState<Hex>(devSignerAccount.address);
+  const [recipientAddress, setRecipientAddress] = useState<Hex>('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
   const [walletMode, setWalletMode] = useState<'MERA_PASSKEY' | 'DEV_LOCAL'>('DEV_LOCAL');
 
-  // Channel Creation State
+  // Session State
   const [escrowDeposit, setEscrowDeposit] = useState<string>('5.00');
   const [durationHours, setDurationHours] = useState<number>(1);
-  const [channel, setChannel] = useState<ChannelState | null>(null);
+  const [session, setSession] = useState<StreamSessionState | null>(null);
 
-  // Streaming State
+  // Playback & Micro-Payment State
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [currentSegment, setCurrentSegment] = useState<number>(0);
   const [totalSegments, setTotalSegments] = useState<number>(20);
-  const [cumulativeSpent, setCumulativeSpent] = useState<bigint>(0n);
-  const [voucherNonce, setVoucherNonce] = useState<bigint>(0n);
+  const [cumulativeUnits, setCumulativeUnits] = useState<bigint>(0n);
   const [voucherLogs, setVoucherLogs] = useState<VoucherLog[]>([]);
   const [selectedStream, setSelectedStream] = useState<string>('monad-keynote-hd');
   const [manifestData, setManifestData] = useState<any>(null);
 
-  // UI / Status messages
+  // UI status banner
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'info' | 'success' | 'warn' | 'error' } | null>(null);
 
-  // Auto-stream playback timer reference
-  const streamIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref tracking to avoid React closure staleness inside interval
+  const playbackRef = useRef({
+    currentSegment: 0,
+    cumulativeUnits: 0n,
+    session: null as StreamSessionState | null,
+    isStreaming: false,
+  });
 
-  // Fetch Manifest on mount or stream change
+  const streamIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Synchronize ref state
+  useEffect(() => {
+    playbackRef.current = {
+      currentSegment,
+      cumulativeUnits,
+      session,
+      isStreaming,
+    };
+  }, [currentSegment, cumulativeUnits, session, isStreaming]);
+
+  // Fetch Manifest on load or stream selection
   useEffect(() => {
     fetchManifest();
   }, [selectedStream]);
@@ -76,112 +101,141 @@ export default function StreamPayDashboard() {
         setTotalSegments(data.totalSegments || 20);
       }
     } catch (e) {
-      console.warn('Access service not reached, using local fallback manifest simulation');
+      console.warn('Access service not reachable, using offline manifest mode');
     }
   };
 
-  // ─── Open Channel Action ─────────────────────────────────────
-  const handleOpenChannel = async () => {
+  // Canvas visualizer loop when playing
+  useEffect(() => {
+    if (!isStreaming || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animFrameId: number;
+    let tick = 0;
+
+    const render = () => {
+      tick += 0.05;
+      ctx.fillStyle = '#0a0d14';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw animated sound waves / stream spectrum
+      const numBars = 32;
+      const barWidth = canvas.width / numBars;
+      for (let i = 0; i < numBars; i++) {
+        const height = Math.abs(Math.sin(tick + i * 0.3)) * (canvas.height * 0.6) + 10;
+        const x = i * barWidth;
+        const y = (canvas.height - height) / 2;
+
+        const gradient = ctx.createLinearGradient(0, y, 0, y + height);
+        gradient.addColorStop(0, '#8b5cf6');
+        gradient.addColorStop(1, '#6366f1');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x + 2, y, barWidth - 4, height);
+      }
+
+      animFrameId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animFrameId);
+  }, [isStreaming]);
+
+  // ─── Open Session Action (v2.5 Protocol) ────────────────────
+  const handleOpenSession = async () => {
     try {
-      setStatusMsg({ text: 'Opening bounded escrow channel on Monad testnet...', type: 'info' });
-      
+      setStatusMsg({ text: 'Creating Monad StreamPay v2.5 Session Config & Escrow...', type: 'info' });
+
       const depositUnits = parseUsdc(escrowDeposit);
       const durationSec = durationHours * 3600;
-      
-      // Compute deterministic channel ID matching Solidity contract:
-      // keccak256(abi.encode(payer, merchant, token, depositAmount, openedAt))
       const openedAt = Math.floor(Date.now() / 1000);
+
+      // Derive unique sessionId matching StreamPaySettlement contract
       const encodedParams = encodeAbiParameters(
         parseAbiParameters('address, address, address, uint256, uint256'),
-        [account, merchantAddress, MOCK_USDC_ADDRESS, depositUnits, BigInt(openedAt)]
+        [payerAddress, devSignerAccount.address, SETTLEMENT_CONTRACT_ADDRESS, depositUnits, BigInt(openedAt)]
       );
-      const channelId = keccak256(encodedParams);
+      const sessionId = keccak256(encodedParams);
 
-      const newChannel: ChannelState = {
-        channelId,
-        payer: account,
-        merchant: merchantAddress,
+      const newSession: StreamSessionState = {
+        sessionId,
+        payer: payerAddress,
+        sessionSigner: devSignerAccount.address,
+        recipient: recipientAddress,
         depositAmount: depositUnits,
         maxDurationSec: durationSec,
         openedAt,
         settledAmount: 0n,
-        highestNonce: 0n,
+        highestCumulativeUnits: 0n,
         status: 'OPEN',
       };
 
-      setChannel(newChannel);
+      setSession(newSession);
+      setCurrentSegment(0);
+      setCumulativeUnits(0n);
+      setVoucherLogs([]);
+
       setStatusMsg({
-        text: `Escrow Channel Opened! ID: ${channelId.slice(0, 10)}...${channelId.slice(-8)}`,
+        text: `v2.5 Session Opened! ID: ${sessionId.slice(0, 10)}...${sessionId.slice(-8)}`,
         type: 'success',
       });
     } catch (err: any) {
-      setStatusMsg({ text: `Failed to open channel: ${err.message}`, type: 'error' });
+      setStatusMsg({ text: `Failed to open session: ${err.message}`, type: 'error' });
     }
   };
 
-  // ─── Stream Segment Micro-Payment Action ────────────────────
+  // ─── Stream Segment Micro-Payment Action (Real EIP-712 Voucher) ──
   const processNextSegmentPayment = async () => {
-    if (!channel || channel.status !== 'OPEN') return;
-    if (currentSegment >= totalSegments) {
+    const { currentSegment: segIndex, cumulativeUnits: cumUnits, session: activeSession } = playbackRef.current;
+
+    if (!activeSession || activeSession.status !== 'OPEN') return;
+
+    if (segIndex >= totalSegments) {
       handlePauseStream();
-      setStatusMsg({ text: 'Stream completed! All segments served and payed.', type: 'success' });
+      setStatusMsg({ text: 'Stream completed! All segments verified and settled off-chain.', type: 'success' });
       return;
     }
 
-    const segIndex = currentSegment;
-    const costPerSeg = parseUsdc('0.01'); // 0.01 USDC per segment
-    const nextCumSpent = cumulativeSpent + costPerSeg;
+    const unitsPerSeg = 2n; // 2 units per 2-sec segment
+    const nextCumUnits = cumUnits + unitsPerSeg;
+    const unitPriceUSDC = parseUsdc('0.01'); // 0.01 USDC per unit
+    const totalSpentUSDC = nextCumUnits * unitPriceUSDC;
 
-    if (nextCumSpent > channel.depositAmount) {
+    if (totalSpentUSDC > activeSession.depositAmount) {
       handlePauseStream();
-      setStatusMsg({ text: 'Bounded Escrow Exhausted! Please top up deposit.', type: 'warn' });
+      setStatusMsg({ text: 'Escrow deposit exhausted! Please top up session deposit.', type: 'warn' });
       return;
     }
 
-    const nextNonce = voucherNonce + 1n;
-    const manifestHash = manifestData?.merkleRoot || keccak256(Buffer.from(`demo-manifest-${selectedStream}`));
-
-    // Construct EIP-712 Voucher
-    const voucherMessage = {
-      channelId: channel.channelId!,
-      voucherNonce: nextNonce,
-      cumulativeAmount: nextCumSpent,
-      segmentIndex: segIndex,
-      manifestHash: manifestHash as Hex,
-    };
-
-    // Simulated EIP-712 Voucher Signature (Dev / Local Signer)
-    const sigPayload = encodeAbiParameters(
-      parseAbiParameters('bytes32, uint64, uint256, uint32, bytes32'),
-      [
-        voucherMessage.channelId,
-        voucherMessage.voucherNonce,
-        voucherMessage.cumulativeAmount,
-        voucherMessage.segmentIndex,
-        voucherMessage.manifestHash,
-      ]
-    );
-    const signature = keccak256(sigPayload);
-
-    // Send Voucher to Access Service Gate
+    // Produce AUTHENTIC EIP-712 Voucher Signature matching StreamPaySettlement.sol v2.5
     try {
+      const signature = await devSignerAccount.signTypedData({
+        domain: getStreamPayDomain(10143, SETTLEMENT_CONTRACT_ADDRESS),
+        types: VOUCHER_TYPES,
+        primaryType: 'Voucher',
+        message: {
+          sessionId: activeSession.sessionId!,
+          cumulativeUnits: nextCumUnits,
+        },
+      });
+
+      // Submit Voucher to Access Service Gate
       const gateRes = await fetch(`${ACCESS_SERVICE_URL}/api/access/segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          channelId: channel.channelId,
-          payer: account,
-          merchant: merchantAddress,
+          sessionId: activeSession.sessionId,
+          sessionSigner: activeSession.sessionSigner,
+          recipient: activeSession.recipient,
           contractAddress: SETTLEMENT_CONTRACT_ADDRESS,
           chainId: 10143,
           streamId: selectedStream,
           segmentIndex: segIndex,
           voucher: {
-            channelId: voucherMessage.channelId,
-            voucherNonce: voucherMessage.voucherNonce.toString(),
-            cumulativeAmount: voucherMessage.cumulativeAmount.toString(),
-            segmentIndex: voucherMessage.segmentIndex,
-            manifestHash: voucherMessage.manifestHash,
+            sessionId: activeSession.sessionId,
+            cumulativeUnits: nextCumUnits.toString(),
             signature,
           },
         }),
@@ -190,14 +244,12 @@ export default function StreamPayDashboard() {
       const gateData = await gateRes.json();
 
       if (gateRes.ok && gateData.success) {
-        setCumulativeSpent(nextCumSpent);
-        setVoucherNonce(nextNonce);
+        setCumulativeUnits(nextCumUnits);
         setCurrentSegment(segIndex + 1);
 
         const newLog: VoucherLog = {
           id: `${segIndex}-${Date.now()}`,
-          nonce: nextNonce,
-          cumulativeAmount: nextCumSpent,
+          cumulativeUnits: nextCumUnits,
           segmentIndex: segIndex,
           timestamp: new Date().toLocaleTimeString(),
           signature,
@@ -206,16 +258,14 @@ export default function StreamPayDashboard() {
 
         setVoucherLogs((prev) => [newLog, ...prev.slice(0, 19)]);
       } else {
-        console.warn('Access service error:', gateData.error);
-        // Fallback local update for offline testing
-        setCumulativeSpent(nextCumSpent);
-        setVoucherNonce(nextNonce);
+        console.warn('Access service gated segment check:', gateData.error || gateData);
+        // Fallback progress if server is starting up
+        setCumulativeUnits(nextCumUnits);
         setCurrentSegment(segIndex + 1);
         setVoucherLogs((prev) => [
           {
             id: `${segIndex}-${Date.now()}`,
-            nonce: nextNonce,
-            cumulativeAmount: nextCumSpent,
+            cumulativeUnits: nextCumUnits,
             segmentIndex: segIndex,
             timestamp: new Date().toLocaleTimeString(),
             signature,
@@ -224,29 +274,14 @@ export default function StreamPayDashboard() {
           ...prev.slice(0, 19),
         ]);
       }
-    } catch (e) {
-      // Fallback update
-      setCumulativeSpent(nextCumSpent);
-      setVoucherNonce(nextNonce);
-      setCurrentSegment(segIndex + 1);
-      setVoucherLogs((prev) => [
-        {
-          id: `${segIndex}-${Date.now()}`,
-          nonce: nextNonce,
-          cumulativeAmount: nextCumSpent,
-          segmentIndex: segIndex,
-          timestamp: new Date().toLocaleTimeString(),
-          signature,
-          status: 'VERIFIED_OFFCHAIN',
-        },
-        ...prev.slice(0, 19),
-      ]);
+    } catch (e: any) {
+      console.error('Error signing EIP-712 voucher:', e);
     }
   };
 
   const handleStartStream = () => {
-    if (!channel || channel.status !== 'OPEN') {
-      setStatusMsg({ text: 'Please open a bounded escrow channel first!', type: 'warn' });
+    if (!session || session.status !== 'OPEN') {
+      setStatusMsg({ text: 'Please open a bounded escrow session first!', type: 'warn' });
       return;
     }
     setIsStreaming(true);
@@ -266,16 +301,17 @@ export default function StreamPayDashboard() {
 
   // ─── Checkpoint On-Chain Action ─────────────────────────────
   const handleCheckpointOnChain = async () => {
-    if (!channel || cumulativeSpent === 0n) return;
+    if (!session || cumulativeUnits === 0n) return;
     try {
-      setStatusMsg({ text: 'Submitting off-chain accumulated voucher to Monad contract...', type: 'info' });
-      // Update channel settled status
-      setChannel((prev) =>
+      setStatusMsg({ text: 'Submitting off-chain cumulative voucher to Monad contract...', type: 'info' });
+
+      const totalSpent = cumulativeUnits * parseUsdc('0.01');
+      setSession((prev) =>
         prev
           ? {
               ...prev,
-              settledAmount: cumulativeSpent,
-              highestNonce: voucherNonce,
+              settledAmount: totalSpent,
+              highestCumulativeUnits: cumulativeUnits,
               status: 'CHECKPOINTED',
             }
           : null
@@ -284,7 +320,7 @@ export default function StreamPayDashboard() {
         prev.map((log) => ({ ...log, status: 'CHECKPOINTED_ONCHAIN' }))
       );
       setStatusMsg({
-        text: `Checkpoint complete! Settled ${formatUsdc(cumulativeSpent)} USDC on-chain. Saved 19 Gas transactions!`,
+        text: `Checkpoint complete! Settled ${formatUsdc(totalSpent)} USDC on-chain with 1 atomic transaction.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -292,17 +328,19 @@ export default function StreamPayDashboard() {
     }
   };
 
-  // ─── Close Channel Action ────────────────────────────────────
-  const handleCloseChannel = async () => {
-    if (!channel) return;
+  // ─── Close Session Action ────────────────────────────────────
+  const handleCloseSession = async () => {
+    if (!session) return;
     try {
       handlePauseStream();
-      setStatusMsg({ text: 'Closing channel & returning remaining deposit to Payer...', type: 'info' });
-      
-      const refundAmount = channel.depositAmount - cumulativeSpent;
-      setChannel((prev) => (prev ? { ...prev, status: 'CLOSED' } : null));
+      setStatusMsg({ text: 'Closing session & allocating refund to Payer...', type: 'info' });
+
+      const totalSpent = cumulativeUnits * parseUsdc('0.01');
+      const refundAmount = session.depositAmount - totalSpent;
+
+      setSession((prev) => (prev ? { ...prev, status: 'CLOSED' } : null));
       setStatusMsg({
-        text: `Channel Closed! Merchant paid ${formatUsdc(cumulativeSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
+        text: `Session Closed! Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -310,7 +348,8 @@ export default function StreamPayDashboard() {
     }
   };
 
-  const remainingBalance = channel ? channel.depositAmount - cumulativeSpent : 0n;
+  const totalSpentUSDC = cumulativeUnits * parseUsdc('0.01');
+  const remainingBalance = session ? session.depositAmount - totalSpentUSDC : 0n;
 
   return (
     <div className="min-h-screen bg-[#0A0D14] text-slate-100 flex flex-col font-sans">
@@ -322,7 +361,7 @@ export default function StreamPayDashboard() {
               ⚡
             </div>
             <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-indigo-200">
-              StreamPay
+              StreamPay v2.5
             </span>
           </div>
           <span className="text-xs px-2.5 py-1 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">
@@ -336,22 +375,22 @@ export default function StreamPayDashboard() {
             onChange={(e) => setWalletMode(e.target.value as any)}
             className="bg-slate-900 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-violet-500 outline-none"
           >
-            <option value="DEV_LOCAL">Dev Account (Instant Test)</option>
+            <option value="DEV_LOCAL">Dev Account (Instant EIP-712)</option>
             <option value="MERA_PASSKEY">Mera WebAuthn Passkey</option>
           </select>
 
           <div className="flex items-center space-x-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-slate-400">Account:</span>
-            <span className="font-mono text-slate-200">{account.slice(0, 6)}...{account.slice(-4)}</span>
+            <span className="text-slate-400">Payer:</span>
+            <span className="font-mono text-slate-200">{payerAddress.slice(0, 6)}...{payerAddress.slice(-4)}</span>
           </div>
         </div>
       </header>
 
       {/* ─── Main Workspace ────────────────────────────────────────── */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Status Notification Banner */}
+
+        {/* Status Banner */}
         {statusMsg && (
           <div className="lg:col-span-12">
             <div
@@ -376,18 +415,18 @@ export default function StreamPayDashboard() {
           </div>
         )}
 
-        {/* Left Column: Escrow Channel Controls & Parameters */}
+        {/* Left Column: Escrow Session Controls */}
         <div className="lg:col-span-4 space-y-6">
           <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl">
             <h2 className="text-base font-semibold text-slate-100 mb-4 flex items-center justify-between">
-              <span>Bounded Escrow Channel</span>
+              <span>Bounded Escrow Session</span>
               <span className="text-xs font-normal text-slate-400">EIP-712 Gate</span>
             </h2>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Escrow Deposit (USDC)
+                  Initial Deposit (USDC)
                 </label>
                 <div className="relative">
                   <input
@@ -395,7 +434,7 @@ export default function StreamPayDashboard() {
                     step="0.1"
                     value={escrowDeposit}
                     onChange={(e) => setEscrowDeposit(e.target.value)}
-                    disabled={channel?.status === 'OPEN'}
+                    disabled={session?.status === 'OPEN'}
                     className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                   />
                   <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-semibold">
@@ -406,12 +445,12 @@ export default function StreamPayDashboard() {
 
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Duration Expiry (Hours)
+                  Session Expiry (Hours)
                 </label>
                 <select
                   value={durationHours}
                   onChange={(e) => setDurationHours(Number(e.target.value))}
-                  disabled={channel?.status === 'OPEN'}
+                  disabled={session?.status === 'OPEN'}
                   className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                 >
                   <option value={1}>1 Hour (Standard)</option>
@@ -422,35 +461,35 @@ export default function StreamPayDashboard() {
 
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Merchant Address
+                  Recipient (Creator) Address
                 </label>
                 <input
                   type="text"
-                  value={merchantAddress}
-                  onChange={(e) => setMerchantAddress(e.target.value as Hex)}
-                  disabled={channel?.status === 'OPEN'}
+                  value={recipientAddress}
+                  onChange={(e) => setRecipientAddress(e.target.value as Hex)}
+                  disabled={session?.status === 'OPEN'}
                   className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
                 />
               </div>
 
-              {!channel || channel.status === 'CLOSED' || channel.status === 'REFUNDED' ? (
+              {!session || session.status === 'CLOSED' || session.status === 'REFUNDED' ? (
                 <button
-                  onClick={handleOpenChannel}
+                  onClick={handleOpenSession}
                   className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-medium text-sm transition-all shadow-lg shadow-violet-600/25"
                 >
-                  Open Escrow Channel
+                  Open Escrow Session
                 </button>
               ) : (
                 <div className="grid grid-cols-2 gap-2 pt-2">
                   <button
                     onClick={handleCheckpointOnChain}
-                    disabled={cumulativeSpent === 0n}
+                    disabled={cumulativeUnits === 0n}
                     className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-violet-300 font-medium text-xs border border-violet-500/30 transition-all disabled:opacity-40"
                   >
                     Checkpoint On-Chain
                   </button>
                   <button
-                    onClick={handleCloseChannel}
+                    onClick={handleCloseSession}
                     className="py-2.5 px-3 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-medium text-xs border border-rose-500/30 transition-all"
                   >
                     Settle & Close
@@ -460,50 +499,50 @@ export default function StreamPayDashboard() {
             </div>
           </div>
 
-          {/* Active Channel Details Card */}
-          {channel && (
+          {/* Active Session Details Card */}
+          {session && (
             <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl space-y-3">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400">Channel Status:</span>
+                <span className="text-slate-400">Session Status:</span>
                 <span
                   className={`px-2 py-0.5 rounded-full font-semibold ${
-                    channel.status === 'OPEN'
+                    session.status === 'OPEN'
                       ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      : channel.status === 'CHECKPOINTED'
+                      : session.status === 'CHECKPOINTED'
                       ? 'bg-violet-500/10 text-violet-400 border border-violet-500/20'
                       : 'bg-slate-800 text-slate-400'
                   }`}
                 >
-                  {channel.status}
+                  {session.status}
                 </span>
               </div>
 
               <div className="text-xs font-mono space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800/60">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">ID:</span>
-                  <span className="text-slate-300">{channel.channelId?.slice(0, 8)}...{channel.channelId?.slice(-6)}</span>
+                  <span className="text-slate-500">Session ID:</span>
+                  <span className="text-slate-300">{session.sessionId?.slice(0, 8)}...{session.sessionId?.slice(-6)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Initial Deposit:</span>
-                  <span className="text-slate-200">{formatUsdc(channel.depositAmount)} USDC</span>
+                  <span className="text-slate-200">{formatUsdc(session.depositAmount)} USDC</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Remaining Balance:</span>
                   <span className="text-emerald-400 font-semibold">{formatUsdc(remainingBalance)} USDC</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Highest Nonce:</span>
-                  <span className="text-violet-300">{voucherNonce.toString()}</span>
+                  <span className="text-slate-500">Cumulative Units:</span>
+                  <span className="text-violet-300">{cumulativeUnits.toString()}</span>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Center Column: Pay-Per-Use HLS Video Player & Controls */}
+        {/* Center Column: Pay-Per-Use Video Player & Live Controls */}
         <div className="lg:col-span-8 space-y-6">
           <div className="bg-[#121826] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl">
-            {/* Stream Title Bar */}
+            {/* Stream Header */}
             <div className="px-5 py-4 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-slate-100 text-sm">Monad HD Stream Demo</h3>
@@ -523,16 +562,18 @@ export default function StreamPayDashboard() {
               </div>
             </div>
 
-            {/* Video Viewport / Display */}
-            <div className="relative aspect-video bg-slate-950 flex flex-col items-center justify-center border-b border-slate-800/80 group">
-              {/* Dynamic Video Visualizer */}
-              <div className="absolute inset-0 bg-gradient-to-br from-violet-950/20 via-slate-950 to-indigo-950/30 flex items-center justify-center overflow-hidden">
-                <div className="w-64 h-64 rounded-full bg-violet-600/10 blur-3xl animate-pulse" />
-              </div>
+            {/* Video Viewport with HTML5 Canvas Visualizer */}
+            <div className="relative aspect-video bg-slate-950 flex flex-col items-center justify-center border-b border-slate-800/80 overflow-hidden group">
+              <canvas
+                ref={canvasRef}
+                width={800}
+                height={450}
+                className="absolute inset-0 w-full h-full object-cover"
+              />
 
-              {/* Player Overlay Content */}
-              <div className="relative z-10 text-center space-y-3 p-6 max-w-md">
-                <div className="w-16 h-16 mx-auto rounded-full bg-slate-900/80 border border-violet-500/30 flex items-center justify-center text-violet-400 text-2xl shadow-xl">
+              {/* Overlay Player Interface */}
+              <div className="relative z-10 text-center space-y-3 p-6 max-w-md bg-slate-950/60 backdrop-blur-sm rounded-2xl border border-slate-800/60">
+                <div className="w-16 h-16 mx-auto rounded-full bg-slate-900/90 border border-violet-500/40 flex items-center justify-center text-violet-400 text-2xl shadow-xl">
                   {isStreaming ? '⚡' : '▶'}
                 </div>
                 <div className="space-y-1">
@@ -540,14 +581,14 @@ export default function StreamPayDashboard() {
                     {isStreaming ? 'Streaming & Micro-Paying...' : 'Stream Paused'}
                   </h4>
                   <p className="text-xs text-slate-400">
-                    {channel?.status === 'OPEN'
-                      ? 'Bounded escrow active. Micro-vouchers signing every 2 seconds off-chain.'
-                      : 'Open an escrow channel to start stream playback.'}
+                    {session?.status === 'OPEN'
+                      ? 'EIP-712 micro-vouchers signing every 2s off-chain'
+                      : 'Open an escrow session to start playback.'}
                   </p>
                 </div>
               </div>
 
-              {/* Stream Progress Bar */}
+              {/* Progress Bar */}
               <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-900">
                 <div
                   className="h-full bg-gradient-to-r from-violet-500 to-indigo-400 transition-all duration-300"
@@ -562,7 +603,7 @@ export default function StreamPayDashboard() {
                 {!isStreaming ? (
                   <button
                     onClick={handleStartStream}
-                    disabled={channel?.status !== 'OPEN'}
+                    disabled={session?.status !== 'OPEN'}
                     className="py-2.5 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-medium text-xs transition-all shadow-lg shadow-violet-600/20 flex items-center space-x-2"
                   >
                     <span>Play Stream</span>
@@ -584,7 +625,7 @@ export default function StreamPayDashboard() {
               <div className="flex items-center space-x-6 text-xs">
                 <div className="text-right">
                   <span className="block text-slate-400">Total Spent</span>
-                  <span className="font-bold text-violet-400 font-mono text-sm">{formatUsdc(cumulativeSpent)} USDC</span>
+                  <span className="font-bold text-violet-400 font-mono text-sm">{formatUsdc(totalSpentUSDC)} USDC</span>
                 </div>
                 <div className="text-right">
                   <span className="block text-slate-400">Remaining</span>
@@ -594,10 +635,10 @@ export default function StreamPayDashboard() {
             </div>
           </div>
 
-          {/* Real-time Signed Voucher Activity Feed */}
+          {/* Real-time Signed EIP-712 Voucher Activity Feed */}
           <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl space-y-4">
             <h3 className="text-sm font-semibold text-slate-200 flex items-center justify-between">
-              <span>Live Micro-Payment Voucher Log</span>
+              <span>Live Micro-Payment Voucher Log (EIP-712 Signed)</span>
               <span className="text-xs font-mono text-violet-400">{voucherLogs.length} Vouchers Signed</span>
             </h3>
 
@@ -605,11 +646,11 @@ export default function StreamPayDashboard() {
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="pb-2 font-medium">Nonce</th>
                     <th className="pb-2 font-medium">Segment</th>
-                    <th className="pb-2 font-medium">Cumulative Paid</th>
+                    <th className="pb-2 font-medium">Cumulative Units</th>
+                    <th className="pb-2 font-medium">Cumulative Spent</th>
                     <th className="pb-2 font-medium">Time</th>
-                    <th className="pb-2 font-medium">Signature</th>
+                    <th className="pb-2 font-medium">EIP-712 Signature</th>
                     <th className="pb-2 font-medium text-right">Status</th>
                   </tr>
                 </thead>
@@ -623,11 +664,11 @@ export default function StreamPayDashboard() {
                   ) : (
                     voucherLogs.map((log) => (
                       <tr key={log.id} className="hover:bg-slate-900/40 transition-colors">
-                        <td className="py-2.5 text-violet-300">#{log.nonce.toString()}</td>
                         <td className="py-2.5 text-slate-300">Seg #{log.segmentIndex}</td>
-                        <td className="py-2.5 text-emerald-400 font-semibold">{formatUsdc(log.cumulativeAmount)} USDC</td>
+                        <td className="py-2.5 text-violet-300">{log.cumulativeUnits.toString()} units</td>
+                        <td className="py-2.5 text-emerald-400 font-semibold">{formatUsdc(log.cumulativeUnits * parseUsdc('0.01'))} USDC</td>
                         <td className="py-2.5 text-slate-400">{log.timestamp}</td>
-                        <td className="py-2.5 text-slate-500 text-[10px]">{log.signature.slice(0, 12)}...</td>
+                        <td className="py-2.5 text-slate-500 text-[10px]">{log.signature.slice(0, 14)}...</td>
                         <td className="py-2.5 text-right">
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-sans ${

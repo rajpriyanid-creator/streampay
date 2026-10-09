@@ -1,69 +1,59 @@
-import { verifyTypedData, keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
+import { verifyTypedData, type Hex } from 'viem';
 
-// EIP-712 Voucher Type Definition
+// EIP-712 Voucher Type Definition matching StreamPaySettlement.sol v2.5
 export const VOUCHER_TYPE = {
-  PaymentVoucher: [
-    { name: 'channelId', type: 'bytes32' },
-    { name: 'voucherNonce', type: 'uint64' },
-    { name: 'cumulativeAmount', type: 'uint256' },
-    { name: 'segmentIndex', type: 'uint32' },
-    { name: 'manifestHash', type: 'bytes32' },
+  Voucher: [
+    { name: 'sessionId', type: 'bytes32' },
+    { name: 'cumulativeUnits', type: 'uint64' },
   ],
 } as const;
 
 export interface Voucher {
-  channelId: Hex;
-  voucherNonce: bigint;
-  cumulativeAmount: bigint;
-  segmentIndex: number;
-  manifestHash: Hex;
+  sessionId: Hex;
+  cumulativeUnits: bigint;
   signature: Hex;
 }
 
-export interface StoredChannelVoucher {
-  channelId: Hex;
-  payer: Hex;
-  merchant: Hex;
+export interface StoredSessionVoucher {
+  sessionId: Hex;
+  sessionSigner: Hex;
+  recipient: Hex;
   contractAddress: Hex;
   chainId: number;
-  highestNonce: bigint;
-  highestCumulativeAmount: bigint;
+  highestCumulativeUnits: bigint;
   lastVoucher: Voucher;
   lastUpdated: number;
   totalServedSegments: number;
 }
 
-// In-memory store for active streaming vouchers
-const voucherStore = new Map<string, StoredChannelVoucher>();
+// In-memory store for active streaming vouchers by sessionId
+const voucherStore = new Map<string, StoredSessionVoucher>();
 
 /**
- * Verifies EIP-712 Voucher signature against expected payer address.
+ * Verifies EIP-712 Voucher signature against expected sessionSigner (or payer) address.
  */
 export async function verifyVoucherSignature(
   voucher: Voucher,
-  payerAddress: Hex,
+  signerAddress: Hex,
   contractAddress: Hex,
   chainId: number
 ): Promise<boolean> {
   const domain = {
     name: 'StreamPaySettlement',
-    version: '1',
+    version: '2.5',
     chainId: BigInt(chainId),
     verifyingContract: contractAddress,
   } as const;
 
   try {
     const valid = await verifyTypedData({
-      address: payerAddress,
+      address: signerAddress,
       domain,
       types: VOUCHER_TYPE,
-      primaryType: 'PaymentVoucher',
+      primaryType: 'Voucher',
       message: {
-        channelId: voucher.channelId,
-        voucherNonce: voucher.voucherNonce,
-        cumulativeAmount: voucher.cumulativeAmount,
-        segmentIndex: voucher.segmentIndex,
-        manifestHash: voucher.manifestHash,
+        sessionId: voucher.sessionId,
+        cumulativeUnits: voucher.cumulativeUnits,
       },
       signature: voucher.signature,
     });
@@ -75,48 +65,39 @@ export async function verifyVoucherSignature(
 }
 
 /**
- * Records and updates voucher state for a given channel.
- * Guarantees monotonic nonce & cumulative amount increments.
+ * Records and updates voucher state for a given session.
+ * Guarantees monotonic cumulativeUnits increments.
  */
-export function updateChannelVoucher(
-  channelId: Hex,
-  payer: Hex,
-  merchant: Hex,
+export function updateSessionVoucher(
+  sessionId: Hex,
+  sessionSigner: Hex,
+  recipient: Hex,
   contractAddress: Hex,
   chainId: number,
   voucher: Voucher
 ): { success: boolean; reason?: string } {
-  const existing = voucherStore.get(channelId.toLowerCase());
+  const existing = voucherStore.get(sessionId.toLowerCase());
 
   if (existing) {
-    if (voucher.voucherNonce <= existing.highestNonce) {
+    if (voucher.cumulativeUnits <= existing.highestCumulativeUnits) {
       return {
         success: false,
-        reason: `Stale or replay nonce: ${voucher.voucherNonce} <= existing ${existing.highestNonce}`,
+        reason: `Cumulative units non-monotonic: ${voucher.cumulativeUnits} <= existing ${existing.highestCumulativeUnits}`,
       };
     }
 
-    if (voucher.cumulativeAmount < existing.highestCumulativeAmount) {
-      return {
-        success: false,
-        reason: `Cumulative amount non-monotonic: ${voucher.cumulativeAmount} < existing ${existing.highestCumulativeAmount}`,
-      };
-    }
-
-    existing.highestNonce = voucher.voucherNonce;
-    existing.highestCumulativeAmount = voucher.cumulativeAmount;
+    existing.highestCumulativeUnits = voucher.cumulativeUnits;
     existing.lastVoucher = voucher;
     existing.lastUpdated = Date.now();
     existing.totalServedSegments += 1;
   } else {
-    voucherStore.set(channelId.toLowerCase(), {
-      channelId,
-      payer,
-      merchant,
+    voucherStore.set(sessionId.toLowerCase(), {
+      sessionId,
+      sessionSigner,
+      recipient,
       contractAddress,
       chainId,
-      highestNonce: voucher.voucherNonce,
-      highestCumulativeAmount: voucher.cumulativeAmount,
+      highestCumulativeUnits: voucher.cumulativeUnits,
       lastVoucher: voucher,
       lastUpdated: Date.now(),
       totalServedSegments: 1,
@@ -127,15 +108,16 @@ export function updateChannelVoucher(
 }
 
 /**
- * Gets the latest recorded voucher for a channel.
+ * Gets the latest recorded voucher for a session.
  */
-export function getLatestVoucher(channelId: Hex): StoredChannelVoucher | undefined {
-  return voucherStore.get(channelId.toLowerCase());
+export function getLatestVoucher(sessionId: Hex): StoredSessionVoucher | undefined {
+  return voucherStore.get(sessionId.toLowerCase());
 }
 
 /**
- * Returns all active channel voucher states.
+ * Returns all active session voucher states.
  */
-export function getAllVouchers(): StoredChannelVoucher[] {
+export function getAllVouchers(): StoredSessionVoucher[] {
   return Array.from(voucherStore.values());
 }
+

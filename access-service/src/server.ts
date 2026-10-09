@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { verifyVoucherSignature, updateChannelVoucher, getLatestVoucher, getAllVouchers, Voucher } from './voucherStore';
+import { verifyVoucherSignature, updateSessionVoucher, getLatestVoucher, getAllVouchers, Voucher } from './voucherStore';
 import { type Hex, keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
 
 const app = express();
@@ -12,41 +12,39 @@ app.use(express.json());
 // ─── Demo Stream Manifest Definition ───────────────────────────
 interface StreamSegment {
   index: number;
-  durationSec: number;
+  durationUnits: number; // 2 seconds per unit
   costUSDC: bigint; // USDC base units (6 decimals)
-  cumulativeCost: bigint;
+  cumulativeUnits: bigint;
   contentHash: Hex;
 }
 
-// Generate sample manifest with 20 segments (0.01 USDC per segment = 10,000 base units)
 const SEGMENT_DURATION = 2; // seconds
-const COST_PER_SEGMENT = 10000n; // 0.01 USDC
+const UNITS_PER_SEGMENT = 2n;
 
 function createDemoManifest(streamId: string) {
   const segments: StreamSegment[] = [];
-  let cumCost = 0n;
+  let cumUnits = 0n;
 
   for (let i = 0; i < 20; i++) {
-    cumCost += COST_PER_SEGMENT;
+    cumUnits += UNITS_PER_SEGMENT;
     const contentHash = keccak256(
       Buffer.from(`streampay-segment-content-${streamId}-${i}`)
     );
     segments.push({
       index: i,
-      durationSec: SEGMENT_DURATION,
-      costUSDC: COST_PER_SEGMENT,
-      cumulativeCost: cumCost,
+      durationUnits: SEGMENT_DURATION,
+      costUSDC: UNITS_PER_SEGMENT * 10000n, // 0.02 USDC
+      cumulativeUnits: cumUnits,
       contentHash,
     });
   }
 
-  // Compute Merkle leaves & root
-  // Leaf format matching contract: keccak256(abi.encode(segmentIndex, contentHash, cumulativeCost))
+  // Compute Merkle leaves & root matching Solidity segment leaf format
   const leaves = segments.map((s) =>
     keccak256(
       encodeAbiParameters(
-        parseAbiParameters('uint32, bytes32, uint256'),
-        [s.index, s.contentHash, s.cumulativeCost]
+        parseAbiParameters('uint32, bytes32, uint64'),
+        [s.index, s.contentHash, s.cumulativeUnits]
       )
     )
   );
@@ -59,13 +57,13 @@ function createDemoManifest(streamId: string) {
     title: 'Monad StreamPay HD Demo Video',
     totalSegments: segments.length,
     totalDurationSec: segments.length * SEGMENT_DURATION,
-    pricePerSegmentUSDC: '0.01',
+    unitPriceUSDC: '0.01',
     merkleRoot,
     segments: segments.map((s) => ({
       index: s.index,
-      durationSec: s.durationSec,
+      durationUnits: s.durationUnits,
       costUSDC: s.costUSDC.toString(),
-      cumulativeCost: s.cumulativeCost.toString(),
+      cumulativeUnits: s.cumulativeUnits.toString(),
       contentHash: s.contentHash,
     })),
     treeLayers: merkleTree,
@@ -157,9 +155,9 @@ app.get('/api/manifest/:streamId/segment/:index/proof', (req: Request, res: Resp
 app.post('/api/access/segment', async (req: Request, res: Response) => {
   try {
     const {
-      channelId,
-      payer,
-      merchant,
+      sessionId,
+      sessionSigner,
+      recipient,
       contractAddress,
       chainId,
       streamId,
@@ -167,18 +165,14 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       voucher,
     } = req.body;
 
-    if (!channelId || !payer || !contractAddress || !voucher) {
+    if (!sessionId || !sessionSigner || !contractAddress || !voucher) {
       res.status(400).json({ error: 'Missing required parameters' });
       return;
     }
 
-    // Convert string BigInt values from request payload
     const parsedVoucher: Voucher = {
-      channelId: voucher.channelId as Hex,
-      voucherNonce: BigInt(voucher.voucherNonce),
-      cumulativeAmount: BigInt(voucher.cumulativeAmount),
-      segmentIndex: Number(voucher.segmentIndex),
-      manifestHash: voucher.manifestHash as Hex,
+      sessionId: voucher.sessionId as Hex,
+      cumulativeUnits: BigInt(voucher.cumulativeUnits),
       signature: voucher.signature as Hex,
     };
 
@@ -194,20 +188,20 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 2. Validate payment sufficiency: cumulative amount in voucher must cover this segment's cumulative cost
-    const requiredCost = BigInt(targetSegment.cumulativeCost);
-    if (parsedVoucher.cumulativeAmount < requiredCost) {
+    // 2. Validate payment sufficiency: cumulative units in voucher must cover target segment's required cumulative units
+    const requiredUnits = BigInt(targetSegment.cumulativeUnits);
+    if (parsedVoucher.cumulativeUnits < requiredUnits) {
       res.status(402).json({
         error: 'Payment Required',
-        detail: `Voucher cumulative amount ${parsedVoucher.cumulativeAmount} is less than required segment cost ${requiredCost}`,
+        detail: `Voucher cumulative units ${parsedVoucher.cumulativeUnits} is less than required segment cumulative units ${requiredUnits}`,
       });
       return;
     }
 
-    // 3. Verify EIP-712 Voucher signature
+    // 3. Verify EIP-712 Voucher signature against sessionSigner
     const isValidSig = await verifyVoucherSignature(
       parsedVoucher,
-      payer as Hex,
+      sessionSigner as Hex,
       contractAddress as Hex,
       Number(chainId || 10143)
     );
@@ -218,10 +212,10 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     }
 
     // 4. Update off-chain voucher store
-    const updateResult = updateChannelVoucher(
-      channelId as Hex,
-      payer as Hex,
-      merchant as Hex,
+    const updateResult = updateSessionVoucher(
+      sessionId as Hex,
+      sessionSigner as Hex,
+      recipient as Hex,
       contractAddress as Hex,
       Number(chainId || 10143),
       parsedVoucher
@@ -232,19 +226,17 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 5. Return authorized segment payload or HLS fragment metadata
-    // In demo mode, returning segment metadata with authorization payload token
+    // 5. Return authorized segment payload token
     const segmentToken = keccak256(
-      Buffer.from(`auth-token-${channelId}-${segmentIndex}-${Date.now()}`)
+      Buffer.from(`auth-token-${sessionId}-${segmentIndex}-${Date.now()}`)
     );
 
     res.json({
       success: true,
-      channelId,
+      sessionId,
       segmentIndex,
-      cumulativePaid: parsedVoucher.cumulativeAmount.toString(),
+      cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      // Stream payload simulated TS fragment binary placeholder/manifest info
       contentUrl: `/api/access/content/${streamId}/segment_${segmentIndex}.ts?token=${segmentToken}`,
     });
   } catch (err: any) {
@@ -253,30 +245,28 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
   }
 });
 
-// ─── Latest Channel Voucher Query (for merchant checkpointing) ──
-app.get('/api/channel/latest-voucher/:channelId', (req: Request, res: Response) => {
-  const { channelId } = req.params;
-  const stored = getLatestVoucher(channelId as Hex);
+// ─── Latest Session Voucher Query (for merchant checkpointing) ──
+app.get('/api/session/latest-voucher/:sessionId', (req: Request, res: Response) => {
+  const { sessionId } = req.params;
+  const stored = getLatestVoucher(sessionId as Hex);
 
   if (!stored) {
-    res.status(404).json({ error: 'No vouchers found for channel' });
+    res.status(404).json({ error: 'No vouchers found for session' });
     return;
   }
 
   res.json({
-    channelId: stored.channelId,
-    payer: stored.payer,
-    merchant: stored.merchant,
+    sessionId: stored.sessionId,
+    sessionSigner: stored.sessionSigner,
+    recipient: stored.recipient,
     contractAddress: stored.contractAddress,
     chainId: stored.chainId,
-    highestNonce: stored.highestNonce.toString(),
-    highestCumulativeAmount: stored.highestCumulativeAmount.toString(),
+    highestCumulativeUnits: stored.highestCumulativeUnits.toString(),
     totalServedSegments: stored.totalServedSegments,
     lastUpdated: stored.lastUpdated,
     lastVoucher: {
       ...stored.lastVoucher,
-      voucherNonce: stored.lastVoucher.voucherNonce.toString(),
-      cumulativeAmount: stored.lastVoucher.cumulativeAmount.toString(),
+      cumulativeUnits: stored.lastVoucher.cumulativeUnits.toString(),
     },
   });
 });
@@ -284,11 +274,10 @@ app.get('/api/channel/latest-voucher/:channelId', (req: Request, res: Response) 
 // ─── All Active Vouchers Query (Merchant Dashboard Metrics) ──────
 app.get('/api/vouchers', (_req: Request, res: Response) => {
   const vouchers = getAllVouchers().map((v) => ({
-    channelId: v.channelId,
-    payer: v.payer,
-    merchant: v.merchant,
-    highestNonce: v.highestNonce.toString(),
-    highestCumulativeAmount: v.highestCumulativeAmount.toString(),
+    sessionId: v.sessionId,
+    sessionSigner: v.sessionSigner,
+    recipient: v.recipient,
+    highestCumulativeUnits: v.highestCumulativeUnits.toString(),
     totalServedSegments: v.totalServedSegments,
     lastUpdated: v.lastUpdated,
   }));
@@ -298,3 +287,4 @@ app.get('/api/vouchers', (_req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`🚀 StreamPay Access Service listening on http://localhost:${PORT}`);
 });
+
