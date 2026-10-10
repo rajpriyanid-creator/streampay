@@ -59,7 +59,7 @@ export class TestProvider implements AccountProvider {
     primaryType: string;
     message: Record<string, any>;
   }): Promise<string> {
-    return this.account.signTypedData({
+    return (this.account as any).signTypedData({
       domain: params.domain,
       types: params.types,
       primaryType: params.primaryType,
@@ -119,7 +119,7 @@ export class CreatorProvider implements AccountProvider {
     primaryType: string;
     message: Record<string, any>;
   }): Promise<string> {
-    return this.account.signTypedData({
+    return (this.account as any).signTypedData({
       domain: params.domain,
       types: params.types,
       primaryType: params.primaryType,

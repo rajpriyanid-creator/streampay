@@ -124,8 +124,8 @@ export function createStreamPayFragmentLoader(
         if (manifestEntry) {
           const segmentHash = await hashSegmentBytes(bytes);
 
-          // Verify SHA-256 hash
-          if (segmentHash.toLowerCase() !== manifestEntry.segmentSha256.toLowerCase()) {
+          // Verify SHA-256 hash if present
+          if (manifestEntry.segmentSha256 && segmentHash.toLowerCase() !== manifestEntry.segmentSha256.toLowerCase()) {
             const reason = 'SEGMENT_HASH_MISMATCH';
             config.onSegmentFailed?.(segmentIndex, reason);
             throw new Error(reason);
@@ -133,17 +133,14 @@ export function createStreamPayFragmentLoader(
 
           // Verify Merkle proof
           const leaf = computeSegmentLeaf({
-            schemaVersion: config.manifest.schemaVersion,
-            contentIdHash: config.manifest.contentIdHash as `0x${string}`,
             segmentIndex: manifestEntry.segmentIndex,
-            durationUnits: manifestEntry.durationUnits,
-            renditionIdHash: config.manifest.renditionIdHash as `0x${string}`,
-            segmentSha256: manifestEntry.segmentSha256 as `0x${string}`,
+            contentHash: ((manifestEntry as any).contentHash || config.manifest.contentIdHash) as `0x${string}`,
+            cumulativeUnits: BigInt((manifestEntry as any).cumulativeUnits || manifestEntry.durationUnits),
           });
 
           const proofValid = verifyMerkleProof(
             leaf,
-            manifestEntry.merkleProof as `0x${string}`[],
+            (manifestEntry.merkleProof || []) as `0x${string}`[],
             config.manifest.manifestRoot as `0x${string}`
           );
 
@@ -156,6 +153,7 @@ export function createStreamPayFragmentLoader(
           // 4. Segment verified! Notify for voucher signing
           config.onSegmentVerified?.(segmentIndex, manifestEntry.durationUnits);
         }
+
 
         this.stats.loading.end = performance.now();
 

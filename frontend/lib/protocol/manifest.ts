@@ -22,6 +22,18 @@ export function computeSegmentLeaf(params: {
 }
 
 /**
+ * Hash segment bytes with SHA-256 (for manifest verification).
+ */
+export async function hashSegmentBytes(bytes: Uint8Array): Promise<Hex> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer);
+  const hashArray = new Uint8Array(hashBuffer);
+  const hex = Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('');
+  return `0x${hex}` as Hex;
+}
+
+
+
+/**
  * Hash two Merkle nodes in sorted lexicographical order.
  */
 export function hashPair(a: Hex, b: Hex): Hex {
