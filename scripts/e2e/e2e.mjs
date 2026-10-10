@@ -277,6 +277,40 @@ await test('rate limiter allows normal traffic', async () => {
   }
 });
 
+// Rate limiter returns 429 RATE_LIMIT_EXCEEDED when limit is exceeded
+await test('rate limiter throttles requests beyond limit and returns 429', async () => {
+  const testIp = '198.51.100.99';
+  const customHeaders = {
+    'Content-Type': 'application/json',
+    'x-forwarded-for': testIp,
+    'x-test-rate-limit': '2',
+  };
+
+  const r1 = await fetch(`${BASE}/api/access/segment`, {
+    method: 'POST',
+    headers: customHeaders,
+    body: JSON.stringify({}),
+  });
+  assert(r1.status !== 429, '1st request should not be rate-limited');
+
+  const r2 = await fetch(`${BASE}/api/access/segment`, {
+    method: 'POST',
+    headers: customHeaders,
+    body: JSON.stringify({}),
+  });
+  assert(r2.status !== 429, '2nd request should not be rate-limited');
+
+  const r3 = await fetch(`${BASE}/api/access/segment`, {
+    method: 'POST',
+    headers: customHeaders,
+    body: JSON.stringify({}),
+  });
+  assertEq(r3.status, 429, '3rd request must be rate limited with 429');
+  const body3 = await r3.json();
+  assertEq(body3.code, 'RATE_LIMIT_EXCEEDED', 'code');
+  assert(r3.headers.get('retry-after') !== null, 'must include retry-after header');
+});
+
 // Bad JSON body
 await test('POST with invalid JSON returns 400', async () => {
   const r = await fetch(`${BASE}/api/access/segment`, {

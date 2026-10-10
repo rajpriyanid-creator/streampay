@@ -63,7 +63,8 @@ export interface ContractVerificationResult {
 export async function verifySettlementContract(
   rpcHttp: string,
   contractAddress: Address,
-  expectedChainId?: number
+  expectedChainId?: number,
+  expectedPaymentToken?: Address
 ): Promise<ContractVerificationResult> {
   try {
     const client = getPublicClient(rpcHttp);
@@ -83,6 +84,18 @@ export async function verifySettlementContract(
     }) as Address;
     if (!paymentToken || paymentToken === '0x0000000000000000000000000000000000000000') {
       return { valid: false, chainId, error: 'Settlement contract returned zero paymentToken address' };
+    }
+    if (expectedPaymentToken && paymentToken.toLowerCase() !== expectedPaymentToken.toLowerCase()) {
+      return {
+        valid: false,
+        chainId,
+        paymentToken,
+        error: `Payment token mismatch: contract uses ${paymentToken}, expected ${expectedPaymentToken}`,
+      };
+    }
+    const tokenBytecode = await client.getBytecode({ address: paymentToken });
+    if (!tokenBytecode || tokenBytecode === '0x') {
+      return { valid: false, chainId, paymentToken, error: `Payment token ${paymentToken} has no deployed bytecode` };
     }
     return { valid: true, paymentToken, chainId };
   } catch (err: any) {

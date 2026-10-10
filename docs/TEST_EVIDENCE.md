@@ -62,7 +62,7 @@ Subtest Results:
 
 ### HTTP E2E Integration Suite (`node scripts/e2e/e2e.mjs`)
 ```
-Status: PASS (25/25 tests pass, exit code 0)
+Status: PASS (26/26 tests pass, exit code 0)
 Location: scripts/e2e/e2e.mjs against http://localhost:4001
 Command: node scripts/e2e/e2e.mjs
 
@@ -86,6 +86,7 @@ Test Results:
   ✅ GET content without token returns 401
   ✅ GET content with bad token returns 403
   ✅ rate limiter allows normal traffic
+  ✅ rate limiter throttles requests beyond limit and returns 429
   ✅ POST with invalid JSON returns 400
   ✅ POST gate with unknown stream returns 404 UNKNOWN_STREAM
   ✅ POST gate with negative segmentIndex returns 400
@@ -93,7 +94,7 @@ Test Results:
   ✅ GET proof for unknown stream returns 404
   ✅ GET playlist for unknown stream returns 404
 
-Results: 25 passed, 0 failed out of 25
+Results: 26 passed, 0 failed out of 26
 ```
 
 ### Access Service Local Chain Integration Suite (`npx tsx scripts/e2e/access-service-integration.ts`)
@@ -135,12 +136,20 @@ Location: scripts/e2e/simulation-mode.test.ts
 Command: npx tsx scripts/e2e/simulation-mode.test.ts
 
 Verification Results:
-  ✔ Step 1: /health reports mode='simulation', isSimulation=true, activeSettlement=null
-  ✔ Step 2: Stream manifest loaded (streamId=monad-keynote-hd, 5 segments)
-  ✔ Step 3: Simulated session created & EIP-712 off-chain voucher signed
-  ✔ Step 4: Access granted through simulation gate with valid single-use token
-  ✔ Step 5: Media bytes fetched and cryptographically verified in pure simulation mode
-  ✔ Step 6: Expired token replacement verified under controlled clock in offline simulation mode (Token B != Token A, delivery verified, duplicate rejected)
+  Part 1 (Explicit Simulation Mode):
+    ✔ Step 1: /health reports mode='simulation', isSimulation=true, activeSettlement=null
+    ✔ Step 2: Stream manifest loaded (streamId=monad-keynote-hd, 5 segments)
+    ✔ Step 3: Simulated session created & EIP-712 off-chain voucher signed
+    ✔ Step 4: Access granted through simulation gate with valid single-use token
+    ✔ Step 5: Media bytes fetched and cryptographically verified in pure simulation mode
+    ✔ Step 6: Expired token replacement verified under controlled clock in offline simulation mode (Token B != Token A, delivery verified, duplicate rejected)
+  Part 2 (Automatic Fallback Mode):
+    ✔ Unreachable RPC with configured settlement address automatically falls back to simulation mode
+    ✔ /health reports mode='simulation' and activeSettlement=null
+    ✔ Simulated voucher signing & segment gating granted in automatic fallback mode
+  Part 3 (Hard Production Prohibition):
+    ✔ ENABLE_TEST_CLOCK=true strictly rejected under NODE_ENV=production
+    ✔ Server refuses startup and terminates with exit code 1 and fatal error log
 ```
 
 ---

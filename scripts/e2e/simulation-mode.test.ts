@@ -24,13 +24,13 @@ async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForServer(url: string, maxAttempts = 30): Promise<boolean> {
+async function waitForServer(url: string, maxAttempts = 60): Promise<boolean> {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await fetch(`${url}/health`);
       if (res.ok) return true;
     } catch {}
-    await sleep(200);
+    await sleep(250);
   }
   return false;
 }
@@ -300,10 +300,134 @@ async function main() {
     }
     console.log('  ✅ Re-request for delivered segment rejected (no duplicate delivery)');
 
-    console.log('\n🎉 Simulation Mode End-to-End Test PASSED!\n');
+    console.log('\n🎉 Explicit Simulation Mode (Part 1) PASSED!\n');
   } finally {
     serviceProc.kill('SIGTERM');
   }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // Part 2: Automatic Fallback Test (configured settlement, dead RPC)
+  // ═════════════════════════════════════════════════════════════════════
+  console.log('─────────────────────────────────────────────────────────────────');
+  console.log('🧪 Part 2: Testing automatic fallback when SETTLEMENT_ADDRESS is set but local RPC is unreachable...');
+  const FALLBACK_PORT = 4098;
+  const FALLBACK_URL = `http://127.0.0.1:${FALLBACK_PORT}`;
+
+  const fallbackProc: ChildProcess = spawn(
+    'node',
+    [path.join(__dirname, '../../access-service/dist/server.js')],
+    {
+      env: {
+        ...process.env,
+        PORT: String(FALLBACK_PORT),
+        NETWORK: 'local',
+        RPC_URL: 'http://127.0.0.1:9999', // Dead RPC port
+        SETTLEMENT_ADDRESS: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512',
+        SIMULATION_MODE: '',
+        ENABLE_TEST_CLOCK: 'false',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+
+  fallbackProc.stdout?.on('data', (d) => process.stdout.write(`  [fallback] ${d}`));
+  fallbackProc.stderr?.on('data', (d) => process.stderr.write(`  [fallback-err] ${d}`));
+
+  try {
+    const ready = await waitForServer(FALLBACK_URL, 40);
+    if (!ready) throw new Error('Fallback server did not start within timeout');
+
+    const healthRes = await fetch(`${FALLBACK_URL}/health`);
+    if (!healthRes.ok) throw new Error(`Health check failed: ${healthRes.status}`);
+    const healthData = await healthRes.json();
+
+    if (healthData.mode !== 'simulation' || !healthData.isSimulation || healthData.activeSettlement !== null) {
+      throw new Error(`Automatic fallback failed: expected simulation mode with null activeSettlement, got: ${JSON.stringify(healthData)}`);
+    }
+    console.log('  ✅ Automatic fallback verified: /health reports mode=simulation and activeSettlement=null');
+
+    // Verify simulation gating works in automatic fallback mode
+    const simAccount = privateKeyToAccount(MOCK_SIGNER_KEY);
+    const voucherDomain = {
+      name: 'StreamPaySettlement',
+      version: '2.5',
+      chainId: 31337,
+      verifyingContract: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512' as Hex,
+    };
+    const voucherTypes = {
+      Voucher: [
+        { name: 'sessionId', type: 'bytes32' },
+        { name: 'cumulativeUnits', type: 'uint64' },
+      ],
+    };
+    const simSessionId = ('0x' + crypto.randomBytes(32).toString('hex')) as Hex;
+    const simSig = await simAccount.signTypedData({
+      domain: voucherDomain,
+      types: voucherTypes,
+      primaryType: 'Voucher',
+      message: { sessionId: simSessionId, cumulativeUnits: 2n },
+    });
+
+    const gateRes = await fetch(`${FALLBACK_URL}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: simSessionId,
+        sessionSigner: simAccount.address,
+        contractAddress: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512',
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 0,
+        voucher: { sessionId: simSessionId, cumulativeUnits: '2', signature: simSig },
+      }),
+    });
+    if (!gateRes.ok) throw new Error(`Fallback gate request failed: ${gateRes.status}`);
+    const gateData = await gateRes.json();
+    if (!gateData.granted || !gateData.segmentToken) throw new Error('Fallback gate did not grant access');
+    console.log('  ✅ Simulation access granted under automatic fallback mode');
+    console.log('\n🎉 Automatic Fallback Test (Part 2) PASSED!\n');
+  } finally {
+    fallbackProc.kill('SIGTERM');
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // Part 3: Hard Production Prohibition Test
+  // ═════════════════════════════════════════════════════════════════════
+  console.log('─────────────────────────────────────────────────────────────────');
+  console.log('🧪 Part 3: Testing hard production prohibition for ENABLE_TEST_CLOCK...');
+  const prodProc: ChildProcess = spawn(
+    'node',
+    [path.join(__dirname, '../../access-service/dist/server.js')],
+    {
+      env: {
+        ...process.env,
+        PORT: '4097',
+        NODE_ENV: 'production',
+        ENABLE_TEST_CLOCK: 'true',
+        NETWORK: 'local',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+
+  let prodStderr = '';
+  prodProc.stderr?.on('data', (d) => { prodStderr += d.toString(); });
+
+  const prodExitCode = await new Promise<number | null>((resolve) => {
+    prodProc.on('exit', (code) => resolve(code));
+    setTimeout(() => {
+      prodProc.kill('SIGKILL');
+      resolve(-1);
+    }, 4000);
+  });
+
+  if (prodExitCode !== 1) {
+    throw new Error(`Expected production process to exit with code 1, got exit code: ${prodExitCode}`);
+  }
+  if (!prodStderr.includes('strictly forbidden when NODE_ENV=production')) {
+    throw new Error(`Expected production prohibition error in stderr, got: ${prodStderr}`);
+  }
+  console.log('  ✅ Production prohibition verified: Server refused startup with code 1 and fatal error');
+  console.log('\n🎉 ALL Simulation & Hardening Tests PASSED!\n');
 }
 
 main().catch((err) => {

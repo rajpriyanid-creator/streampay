@@ -23,8 +23,9 @@ import {
   Voucher,
 } from './voucherStore';
 
-export let activeMode: 'onchain' | 'simulation' = config.SIMULATION_MODE ? 'simulation' : 'onchain';
-export let activeSettlement: Hex | undefined = config.SIMULATION_MODE ? undefined : config.SETTLEMENT_ADDRESS;
+export let activeMode: 'onchain' | 'simulation' = 'simulation';
+export let activeSettlement: Hex | undefined = undefined;
+export let isChainReady = false;
 
 const app = express();
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
@@ -48,12 +49,56 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   }
   next();
 }
+// ─── Rate Limiter Middleware ──────────────────────────────────────
+interface RateBucket {
+  tokens: number;
+  lastRefill: number;
+}
+const rateLimitStore = new Map<string, RateBucket>();
 
+export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
+    const limit = (req.headers['x-test-rate-limit'] && (config.NETWORK === 'local' || process.env.NODE_ENV === 'test'))
+      ? Number(req.headers['x-test-rate-limit'])
+      : defaultLimit;
+
+    const refillRate = limit / 60000; // tokens per ms
+    const clientKey = `${rawIp}`;
+    const now = Date.now();
+
+    let bucket = rateLimitStore.get(clientKey);
+    if (!bucket) {
+      bucket = { tokens: limit, lastRefill: now };
+      rateLimitStore.set(clientKey, bucket);
+    } else {
+      const elapsed = now - bucket.lastRefill;
+      bucket.tokens = Math.min(limit, bucket.tokens + elapsed * refillRate);
+      bucket.lastRefill = now;
+    }
+
+    if (bucket.tokens < 1) {
+      res.setHeader('Retry-After', '60');
+      res.status(429).json({
+        code: 'RATE_LIMIT_EXCEEDED',
+        error: 'Too Many Requests',
+        message: `Rate limit of ${limit} req/min exceeded`,
+      });
+      return;
+    }
+
+    bucket.tokens -= 1;
+    res.setHeader('X-RateLimit-Limit', limit.toString());
+    res.setHeader('X-RateLimit-Remaining', Math.floor(bucket.tokens).toString());
+    next();
+  };
+}
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/health', async (_req: Request, res: Response) => {
   const isSim = activeMode === 'simulation';
   res.json({
     status: 'ok',
+    ready: isChainReady,
     service: 'StreamPay Access Service v2.5',
     mode: activeMode,
     isSimulation: isSim,
@@ -123,7 +168,7 @@ app.get('/api/manifest/:streamId/segment/:index/proof', (req: Request, res: Resp
 });
 
 // ─── Gated Segment Access Endpoint ────────────────────────────
-app.post('/api/access/segment', async (req: Request, res: Response) => {
+app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Response) => {
   try {
     const {
       sessionId,
@@ -382,7 +427,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     }
 
     // Support controlled clock / short test TTL only when explicitly enabled via ENABLE_TEST_CLOCK=true in non-production environments
-    const allowTestTime = config.ENABLE_TEST_CLOCK && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
+    const allowTestTime = config.ENABLE_TEST_CLOCK && process.env.NODE_ENV !== 'production' && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
     let reqNowMs = Date.now();
     if (allowTestTime && req.headers['x-test-simulated-time-ms']) {
       const parsedTime = Number(req.headers['x-test-simulated-time-ms']);
@@ -468,7 +513,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 });
 
 // ─── Gated Content Segment Delivery Route with Token Validation ────
-app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: Response) => {
+app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req: Request, res: Response) => {
   const { streamId, segmentFile } = req.params;
   const { token } = req.query;
 
@@ -484,7 +529,7 @@ app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: 
   }
   const segmentIndex = parseInt(match[1], 10);
 
-  const allowTestTime = config.ENABLE_TEST_CLOCK && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
+  const allowTestTime = config.ENABLE_TEST_CLOCK && process.env.NODE_ENV !== 'production' && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
   let reqNowMs = Date.now();
   if (allowTestTime && req.headers['x-test-simulated-time-ms']) {
     const parsedTime = Number(req.headers['x-test-simulated-time-ms']);
@@ -623,9 +668,18 @@ app.get('/api/vouchers', requireAdmin, (_req: Request, res: Response) => {
 
 app.listen(config.PORT, async () => {
   console.log(`🚀 StreamPay Access Service listening on http://localhost:${config.PORT}`);
+  if (config.ENABLE_TEST_CLOCK && process.env.NODE_ENV === 'production') {
+    console.error('⛔ Fatal: ENABLE_TEST_CLOCK is strictly forbidden when NODE_ENV=production. Exiting.');
+    process.exit(1);
+  }
+  if (!process.env.TOKEN_SECRET && config.NETWORK !== 'local' && process.env.NODE_ENV === 'production') {
+    console.error('⛔ Fatal: TOKEN_SECRET must be explicitly configured in non-local / production environments.');
+    process.exit(1);
+  }
   if (config.SIMULATION_MODE) {
     activeMode = 'simulation';
     activeSettlement = undefined;
+    isChainReady = true;
     console.log(`🧪 Running in explicit SIMULATION_MODE`);
   } else if (config.SETTLEMENT_ADDRESS) {
     console.log(`🔒 Contract Settlement Address: ${config.SETTLEMENT_ADDRESS}`);
@@ -633,6 +687,7 @@ app.listen(config.PORT, async () => {
       const cid = await initChain();
       activeMode = 'onchain';
       activeSettlement = config.SETTLEMENT_ADDRESS;
+      isChainReady = true;
       console.log(`🔗 Connected to chain ${cid}`);
     } catch (e: any) {
       console.error(`⛔ Chain init error: ${e.message}`);
@@ -643,10 +698,12 @@ app.listen(config.PORT, async () => {
       console.warn(`⚠️ Local settlement contract unreachable (${e.message}). Switching to explicit off-chain simulation mode.`);
       activeMode = 'simulation';
       activeSettlement = undefined;
+      isChainReady = true;
     }
   } else {
     activeMode = 'simulation';
     activeSettlement = undefined;
+    isChainReady = true;
     console.log(`⚠️  SETTLEMENT_ADDRESS not set — running in explicit local simulation mode`);
   }
   console.log(`📋 Active mode: ${activeMode} | Allowed streams: ${getStreamIdList().join(', ')}`);

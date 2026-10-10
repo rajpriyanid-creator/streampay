@@ -16,7 +16,7 @@ import { createStreamPayFragmentLoader } from '../lib/hls/StreamPayFragmentLoade
 import localManifest from '../../manifests/local.json';
 import testnetManifest from '../../manifests/testnet.json';
 
-const ACCESS_SERVICE_URL = 'http://localhost:4001';
+const ACCESS_SERVICE_URL = process.env.NEXT_PUBLIC_ACCESS_SERVICE_URL || 'http://localhost:4001';
 
 /**
  * SECURITY: Hard-coded Anvil keys exist ONLY for local development (chainId 31337).
@@ -191,6 +191,20 @@ export default function StreamPayDashboard() {
     }
   };
 
+  // Synchronize contract, token, and deployment when network mode changes
+  useEffect(() => {
+    const manifest = networkMode === 'TESTNET' ? testnetManifest : localManifest;
+    const initialContract = (manifest.settlementContract || (networkMode === 'LOCAL' ? '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512' : '')) as Hex;
+    const initialToken = (manifest.paymentToken?.address || (networkMode === 'LOCAL' ? '0x5FbDB2315678afecb367f032d93F642f64180aa3' : '')) as Address;
+    setContractAddress(initialContract);
+    setPaymentTokenAddress(initialToken);
+    setIsDeployed(Boolean(manifest.settlementContract));
+    if (networkMode === 'TESTNET') {
+      setIsWalletConnected(false);
+      setPayerAddress(null);
+    }
+  }, [networkMode]);
+
   // Verify Bytecode Deployment on mount or network change
   useEffect(() => {
     checkDeployment();
@@ -208,7 +222,12 @@ export default function StreamPayDashboard() {
   }, []);
 
   const checkDeployment = async () => {
-    const res = await verifySettlementContract(activeManifest.rpcHttp, contractAddress, activeManifest.chainId);
+    if (!contractAddress || contractAddress === '0x' || !activeManifest.settlementContract) {
+      setIsDeployed(false);
+      return;
+    }
+    const expectedToken = activeManifest.paymentToken?.address as Address | undefined;
+    const res = await verifySettlementContract(activeManifest.rpcHttp, contractAddress, activeManifest.chainId, expectedToken);
     setIsDeployed(res.valid);
     if (res.valid && res.paymentToken) {
       setPaymentTokenAddress(res.paymentToken);

@@ -52,7 +52,9 @@ export interface OnChainSession {
   status: number;
 }
 
-export const publicClient = createPublicClient({ transport: http(config.rpcUrl) });
+export const publicClient = createPublicClient({
+  transport: http(config.rpcUrl, { timeout: 3000, retryCount: 1 }),
+});
 
 let chainId = 0;
 export function getChainId() { return chainId; }
@@ -60,41 +62,25 @@ export function getChainId() { return chainId; }
 export async function initChain(): Promise<number> {
   const isLocal = config.NETWORK === 'local';
 
+  if (!config.settlementAddress) {
+    throw new Error('SETTLEMENT_ADDRESS is not configured');
+  }
+
+  chainId = await publicClient.getChainId();
+
   if (!isLocal) {
-    // Non-local: MUST fail closed if contract address or bytecode are invalid
-    if (!config.settlementAddress) {
-      throw new Error(`CRITICAL: SETTLEMENT_ADDRESS is required for non-local mode (${config.NETWORK})`);
-    }
-    chainId = await publicClient.getChainId();
     const expectedChain = config.NETWORK === 'testnet' ? 10143 : 143;
     if (chainId !== expectedChain) {
       throw new Error(`CRITICAL: Chain ID mismatch for ${config.NETWORK}. Expected ${expectedChain}, got ${chainId}`);
     }
-    const code = await publicClient.getCode({ address: config.settlementAddress });
-    if (!code || code === '0x') {
-      throw new Error(`CRITICAL: No contract bytecode at SETTLEMENT_ADDRESS ${config.settlementAddress} on chain ${chainId}`);
-    }
-    return chainId;
   }
 
-  // Local mode (permissive for dev/offline testing):
-  if (!config.settlementAddress) {
-    console.warn('⚠️  Local mode: SETTLEMENT_ADDRESS not set — running with local permissive mock');
-    return 31337;
+  const code = await publicClient.getCode({ address: config.settlementAddress });
+  if (!code || code === '0x') {
+    throw new Error(`No contract bytecode found at SETTLEMENT_ADDRESS ${config.settlementAddress} on chain ${chainId}`);
   }
 
-  try {
-    chainId = await publicClient.getChainId();
-    const code = await publicClient.getCode({ address: config.settlementAddress });
-    if (!code || code === '0x') {
-      console.warn(`⚠️  Local mode: No contract bytecode at ${config.settlementAddress}`);
-      return 31337;
-    }
-    return chainId;
-  } catch (err: any) {
-    console.warn(`⚠️  Local mode: RPC connection warning (${err.message}). Using local mode.`);
-    return 31337;
-  }
+  return chainId;
 }
 
 const cache = new Map<string, { at: number; value: OnChainSession }>();
