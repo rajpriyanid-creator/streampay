@@ -50,6 +50,7 @@ async function main() {
         SETTLEMENT_ADDRESS: '',
         NETWORK: 'local',
         ENABLE_TEST_CLOCK: 'true',
+        DATA_STORE_DIR: 'memory',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
@@ -325,6 +326,7 @@ async function main() {
         SETTLEMENT_ADDRESS: '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512',
         SIMULATION_MODE: '',
         ENABLE_TEST_CLOCK: 'false',
+        DATA_STORE_DIR: 'memory',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }
@@ -404,6 +406,8 @@ async function main() {
         NODE_ENV: 'production',
         ENABLE_TEST_CLOCK: 'true',
         NETWORK: 'local',
+        TOKEN_SECRET: 'streampay_secure_production_secret_sample_32chars',
+        DATA_STORE_DIR: 'memory',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }

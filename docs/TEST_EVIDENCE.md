@@ -1,8 +1,8 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** `80f0506124121d94de69d8a4980368bb583e726b` (preceding source fixes: `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
-**GitHub Actions Runs:** [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (Latest: **SUCCESS**), [Run #38071519229](https://github.com/rajpriyanid-creator/streampay/actions/runs/38071519229) (**SUCCESS**), [Run #38071206885](https://github.com/rajpriyanid-creator/streampay/actions/runs/38071206885) (**SUCCESS**)  
+**Commit:** `58178601121797b16870c0b587780e9809121a5b` (preceding source fixes: `80f0506124121d94de69d8a4980368bb583e726b`, `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
+**GitHub Actions Runs:** [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (Latest: **SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**), [Run #38071519229](https://github.com/rajpriyanid-creator/streampay/actions/runs/38071519229) (**SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
 > **Honesty note:** Only results that have been independently executed and observed are marked PASS.  
@@ -150,6 +150,30 @@ Verification Results:
   Part 3 (Hard Production Prohibition):
     ✔ ENABLE_TEST_CLOCK=true strictly rejected under NODE_ENV=production
     ✔ Server refuses startup and terminates with exit code 1 and fatal error log
+```
+
+### Durable Persistence, Restart Recovery & Multi-Instance Suite (`npx tsx scripts/e2e/durable-persistence.test.ts`)
+```
+Status: PASS (Executed in CI & locally)
+Location: scripts/e2e/durable-persistence.test.ts
+Command: npx tsx scripts/e2e/durable-persistence.test.ts
+
+Verification Results:
+  Test 1 (Production/Testnet Secret Hardening):
+    ✔ Missing TOKEN_SECRET on testnet/production rejected with exit code 1
+    ✔ Short TOKEN_SECRET (<32 chars) rejected with exit code 1
+  Test 2 (Process Restart Recovery & Replay Protection):
+    ✔ Segment 0 token granted and content delivered on Instance 1
+    ✔ Confirmed state.json atomically written to disk (reservations, vouchers, delivered tokens, completed segments)
+    ✔ Access service process killed and restarted with same state directory
+    ✔ Recovered voucher state after restart: highestUnits=2, totalServedSegments=1
+    ✔ Consumed single-use token replayed against restarted instance correctly rejected (403)
+    ✔ Duplicate request for already completed segment rejected after restart (status 402/400)
+  Test 3 (Multi-Instance Cluster Sharing & Cross-Instance Replay Protection):
+    ✔ Shared cluster storage configured between Instance A and Instance B
+    ✔ Instance A issued Segment 1 token
+    ✔ Instance B validated & delivered content using Instance A's token (97,196 bytes)
+    ✔ Instance A rejected replay of token consumed by Instance B (cross-instance single-use replay protection)
 ```
 
 ---

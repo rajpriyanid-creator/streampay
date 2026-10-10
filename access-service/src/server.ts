@@ -12,7 +12,7 @@ import {
   UNIT_PRICE,
   UNITS_PER_SEGMENT,
 } from './manifest';
-import { mintAccessToken, consumeAccessToken } from './tokens';
+import { mintAccessToken, consumeAccessToken, consumedTokensMap } from './tokens';
 import { reservationLedger, SessionLimits } from './reservationStore';
 import {
   verifyVoucherSignature,
@@ -20,8 +20,16 @@ import {
   markVoucherDelivered,
   getLatestVoucher,
   getAllVouchers,
+  voucherStoreMap,
   Voucher,
 } from './voucherStore';
+import { registerStores, getOrInitTokenSecret } from './durableStore';
+
+registerStores({
+  consumed: consumedTokensMap,
+  vouchers: voucherStoreMap,
+  sessions: reservationLedger.getSessionsMap(),
+});
 
 export let activeMode: 'onchain' | 'simulation' = 'simulation';
 export let activeSettlement: Hex | undefined = undefined;
@@ -672,8 +680,10 @@ app.listen(config.PORT, async () => {
     console.error('⛔ Fatal: ENABLE_TEST_CLOCK is strictly forbidden when NODE_ENV=production. Exiting.');
     process.exit(1);
   }
-  if (!process.env.TOKEN_SECRET && config.NETWORK !== 'local' && process.env.NODE_ENV === 'production') {
-    console.error('⛔ Fatal: TOKEN_SECRET must be explicitly configured in non-local / production environments.');
+  try {
+    getOrInitTokenSecret();
+  } catch (err: any) {
+    console.error(`⛔ ${err.message}`);
     process.exit(1);
   }
   if (config.SIMULATION_MODE) {

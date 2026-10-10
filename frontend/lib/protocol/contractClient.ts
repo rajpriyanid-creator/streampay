@@ -97,6 +97,38 @@ export async function verifySettlementContract(
     if (!tokenBytecode || tokenBytecode === '0x') {
       return { valid: false, chainId, paymentToken, error: `Payment token ${paymentToken} has no deployed bytecode` };
     }
+    // Verify token decimals
+    try {
+      const decimals = await client.readContract({
+        address: paymentToken,
+        abi: [{
+          type: 'function',
+          name: 'decimals',
+          inputs: [],
+          outputs: [{ name: '', type: 'uint8' }],
+          stateMutability: 'view',
+        }],
+        functionName: 'decimals',
+      }) as number;
+      if (decimals !== 6 && decimals !== 18) {
+        return { valid: false, chainId, paymentToken, error: `Unexpected token decimals: ${decimals}` };
+      }
+    } catch (e: any) {
+      return { valid: false, chainId, paymentToken, error: `Payment token has invalid decimals: ${e.message}` };
+    }
+    // Verify settlement-specific constant CHALLENGE_SECONDS = 900
+    try {
+      const challengeSeconds = await client.readContract({
+        address: contractAddress,
+        abi: STREAMPAY_SETTLEMENT_ABI,
+        functionName: 'CHALLENGE_SECONDS',
+      }) as bigint;
+      if (challengeSeconds !== 900n) {
+        return { valid: false, chainId, paymentToken, error: `Settlement CHALLENGE_SECONDS mismatch: expected 900, got ${challengeSeconds}` };
+      }
+    } catch (err: any) {
+      return { valid: false, chainId, paymentToken, error: `Contract lacks StreamPay settlement methods: ${err.message}` };
+    }
     return { valid: true, paymentToken, chainId };
   } catch (err: any) {
     return { valid: false, error: `Not a valid StreamPaySettlement contract: ${err.message}` };

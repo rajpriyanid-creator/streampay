@@ -8,4 +8,5 @@ cache/
 .env.local
 .DS_Store
 *.tsbuildinfo
+.streampay-data/
 

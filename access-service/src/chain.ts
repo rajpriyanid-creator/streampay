@@ -1,5 +1,5 @@
-import { createPublicClient, http, type Hex } from 'viem';
-import { config } from './config';
+import { createPublicClient, http, type Hex, type Address } from 'viem';
+import { config, readManifestPaymentToken } from './config';
 
 export const SESSION_STATUS = { NONE: 0, OPEN: 1, CLOSE_REQUESTED: 2, CLOSED: 3 } as const;
 
@@ -22,6 +22,20 @@ export const settlementAbi = [
     stateMutability: 'view',
     inputs: [{ name: 'sessionId', type: 'bytes32' }],
     outputs: [{ name: '', type: 'tuple', components: sessionComponents }],
+  },
+  {
+    type: 'function',
+    name: 'paymentToken',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    type: 'function',
+    name: 'CHALLENGE_SECONDS',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint64' }],
   },
 ] as const;
 
@@ -78,6 +92,66 @@ export async function initChain(): Promise<number> {
   const code = await publicClient.getCode({ address: config.settlementAddress });
   if (!code || code === '0x') {
     throw new Error(`No contract bytecode found at SETTLEMENT_ADDRESS ${config.settlementAddress} on chain ${chainId}`);
+  }
+
+  // 1. Verify paymentToken() getter
+  const paymentToken = (await publicClient.readContract({
+    address: config.settlementAddress,
+    abi: settlementAbi,
+    functionName: 'paymentToken',
+  })) as Address;
+
+  if (!paymentToken || paymentToken === '0x0000000000000000000000000000000000000000') {
+    throw new Error('Settlement contract returned zero paymentToken address');
+  }
+
+  // 2. Verify payment token bytecode
+  const tokenCode = await publicClient.getCode({ address: paymentToken });
+  if (!tokenCode || tokenCode === '0x') {
+    throw new Error(`Payment token ${paymentToken} has no deployed bytecode on chain ${chainId}`);
+  }
+
+  // 3. Match against manifest expected payment token if configured
+  const manifestToken = readManifestPaymentToken();
+  if (manifestToken?.address && paymentToken.toLowerCase() !== manifestToken.address.toLowerCase()) {
+    throw new Error(`Payment token mismatch: contract has ${paymentToken}, manifest expects ${manifestToken.address}`);
+  }
+
+  // 4. Verify token decimals
+  try {
+    const decimals = (await publicClient.readContract({
+      address: paymentToken,
+      abi: [{
+        type: 'function',
+        name: 'decimals',
+        stateMutability: 'view',
+        inputs: [],
+        outputs: [{ name: '', type: 'uint8' }],
+      }],
+      functionName: 'decimals',
+    })) as number;
+
+    const expectedDecimals = manifestToken?.expectedDecimals ?? 6;
+    if (decimals !== expectedDecimals) {
+      throw new Error(`Payment token decimals mismatch: got ${decimals}, expected ${expectedDecimals}`);
+    }
+  } catch (err: any) {
+    throw new Error(`Payment token validation failed: ${err.message}`);
+  }
+
+  // 5. Verify StreamPay settlement contract specific constant
+  try {
+    const challengeSec = (await publicClient.readContract({
+      address: config.settlementAddress,
+      abi: settlementAbi,
+      functionName: 'CHALLENGE_SECONDS',
+    })) as bigint;
+
+    if (challengeSec !== 900n) {
+      throw new Error(`Settlement CHALLENGE_SECONDS mismatch: expected 900, got ${challengeSec}`);
+    }
+  } catch (err: any) {
+    throw new Error(`Contract at ${config.settlementAddress} is not a valid StreamPaySettlement: ${err.message}`);
   }
 
   return chainId;

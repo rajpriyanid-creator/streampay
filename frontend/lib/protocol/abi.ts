@@ -19,6 +19,13 @@ export const STREAMPAY_SETTLEMENT_ABI = [
   },
   {
     type: 'function',
+    name: 'CHALLENGE_SECONDS',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint64' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'openWithSignature',
     inputs: [
       {

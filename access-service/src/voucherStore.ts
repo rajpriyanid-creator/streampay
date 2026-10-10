@@ -1,4 +1,5 @@
 import { verifyTypedData, type Hex } from 'viem';
+import { saveAllDurableState, syncFromDisk } from './durableStore';
 
 // EIP-712 Voucher Type Definition matching StreamPaySettlement.sol v2.5
 export const VOUCHER_TYPE = {
@@ -30,6 +31,7 @@ export interface StoredSessionVoucher {
 
 // In-memory store for active streaming session vouchers
 const voucherStore = new Map<string, StoredSessionVoucher>();
+export const voucherStoreMap = voucherStore;
 
 /**
  * Verifies EIP-712 Voucher signature against expected sessionSigner.
@@ -80,6 +82,7 @@ export function updateSessionVoucher(
   chainId: number,
   voucher: Voucher
 ): { success: boolean; reason?: string; isRetry?: boolean } {
+  syncFromDisk();
   const key = sessionId.toLowerCase();
   const existing = voucherStore.get(key);
 
@@ -127,6 +130,7 @@ export function updateSessionVoucher(
       // Permit safe retry with the same voucher.
       existing.lastVoucher = voucher;
       existing.lastUpdated = Date.now();
+      saveAllDurableState();
       return { success: true, isRetry: true };
     }
 
@@ -149,6 +153,7 @@ export function updateSessionVoucher(
     });
   }
 
+  saveAllDurableState();
   return { success: true };
 }
 
@@ -156,6 +161,7 @@ export function updateSessionVoucher(
  * Marks voucher delivery as completed upon successful HTTP content delivery.
  */
 export function markVoucherDelivered(sessionId: Hex, cumulativeUnits: bigint): void {
+  syncFromDisk();
   const key = sessionId.toLowerCase();
   const existing = voucherStore.get(key);
   if (existing) {
@@ -165,6 +171,7 @@ export function markVoucherDelivered(sessionId: Hex, cumulativeUnits: bigint): v
     existing.lastDeliveredVoucher = existing.lastVoucher;
     existing.totalServedSegments += 1;
     existing.lastUpdated = Date.now();
+    saveAllDurableState();
   }
 }
 

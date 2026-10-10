@@ -19,6 +19,25 @@ export function readManifestSettlement(): string | undefined {
   }
 }
 
+export function readManifestPaymentToken(): { address?: Hex; expectedDecimals?: number } | undefined {
+  try {
+    const net = process.env.NETWORK || 'local';
+    const p = path.join(__dirname, '../../manifests', `${net}.json`);
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const addr = parsed.paymentToken?.address;
+      const dec = parsed.paymentToken?.expectedDecimals;
+      return {
+        address: addr && isAddress(addr) ? (getAddress(addr) as Hex) : undefined,
+        expectedDecimals: typeof dec === 'number' ? dec : undefined,
+      };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const rawSettlement = process.env.SETTLEMENT_ADDRESS || readManifestSettlement();
 const validSettlement = rawSettlement && isAddress(rawSettlement) ? (getAddress(rawSettlement) as Hex) : undefined;
 
@@ -40,4 +59,6 @@ export const config = {
   NETWORK: process.env.NETWORK || 'local',
   SIMULATION_MODE: process.env.SIMULATION_MODE === 'true',
   ENABLE_TEST_CLOCK: process.env.ENABLE_TEST_CLOCK === 'true',
+  DATA_STORE_DIR: process.env.DATA_STORE_DIR !== undefined ? process.env.DATA_STORE_DIR : path.join(__dirname, '../../.streampay-data'),
+  TOKEN_SECRET: process.env.TOKEN_SECRET,
 };

@@ -64,9 +64,15 @@ export class SessionMutex {
   }
 }
 
+import { saveAllDurableState, syncFromDisk, clearDurableState } from './durableStore';
+
 export class ReservationLedger {
   private sessions = new Map<string, SessionState>();
   private mutexes = new Map<string, SessionMutex>();
+
+  getSessionsMap(): Map<string, SessionState> {
+    return this.sessions;
+  }
 
   private getMutex(sessionId: string): SessionMutex {
     const key = sessionId.toLowerCase();
@@ -150,6 +156,7 @@ export class ReservationLedger {
   }> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
+      syncFromDisk();
       const state = this.getOrCreateSession(sessionId, limits, onChainSettledUnits);
 
       // Clean up any stale expired reservations first
@@ -259,6 +266,7 @@ export class ReservationLedger {
       state.reservations.set(tokenSig, newEntry);
       state.segmentToTokenSig.set(segmentIndex, tokenSig);
 
+      saveAllDurableState();
       return { allowed: true };
     });
   }
@@ -269,11 +277,13 @@ export class ReservationLedger {
   async onTokenConsumed(sessionId: string, tokenSig: string): Promise<void> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
+      syncFromDisk();
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return;
       const res = state.reservations.get(tokenSig);
       if (res) {
         res.consumed = true;
+        saveAllDurableState();
       }
     });
   }
@@ -286,6 +296,7 @@ export class ReservationLedger {
   async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<{ cumulativeUnits?: bigint }> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
+      syncFromDisk();
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return {};
       const res = state.reservations.get(tokenSig);
@@ -299,6 +310,7 @@ export class ReservationLedger {
         const oldest = state.deliveredTokens.keys().next().value;
         if (oldest) state.deliveredTokens.delete(oldest);
       }
+      saveAllDurableState();
       return { cumulativeUnits: units };
     });
   }
@@ -307,6 +319,7 @@ export class ReservationLedger {
    * Checks if a segment was already delivered and completed for a session.
    */
   isSegmentCompleted(sessionId: string, segmentIndex: number): boolean {
+    syncFromDisk();
     const state = this.sessions.get(sessionId.toLowerCase());
     return state ? state.completedSegments.has(segmentIndex) : false;
   }
@@ -318,12 +331,14 @@ export class ReservationLedger {
   async onDeliveryFailed(sessionId: string, tokenSig: string): Promise<void> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
+      syncFromDisk();
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return;
       const res = state.reservations.get(tokenSig);
       if (res) {
         state.segmentToTokenSig.delete(res.segmentIndex);
         state.reservations.delete(tokenSig);
+        saveAllDurableState();
       }
     });
   }
@@ -335,10 +350,12 @@ export class ReservationLedger {
   async onCheckpoint(sessionId: string, settledUnits: bigint): Promise<void> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
+      syncFromDisk();
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return;
       if (settledUnits > state.lastCheckpointUnits) {
         state.lastCheckpointUnits = settledUnits;
+        saveAllDurableState();
       }
     });
   }
@@ -376,6 +393,7 @@ export class ReservationLedger {
   clear(): void {
     this.sessions.clear();
     this.mutexes.clear();
+    clearDurableState();
   }
 }
 

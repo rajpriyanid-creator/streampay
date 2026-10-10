@@ -4,12 +4,24 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   type Hex,
   type Address,
+  createPublicClient,
+  createWalletClient,
+  custom,
+  http,
 } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import Hls from 'hls.js';
 import { formatUsdc, parseUsdc } from '../lib/protocol/money';
 import { verifySettlementContract, verifyContractDeployed } from '../lib/protocol/contractClient';
-import { openSession, signVoucher, checkpoint, closeCooperative } from '../lib/protocol/lifecycle';
+import {
+  openSession,
+  signVoucher,
+  checkpoint,
+  closeCooperative,
+  openSessionWithWallet,
+  checkpointWithWallet,
+  closeCooperativeWithWallet,
+} from '../lib/protocol/lifecycle';
 import { createStreamPayFragmentLoader } from '../lib/hls/StreamPayFragmentLoader';
 
 // Network manifests
@@ -255,6 +267,9 @@ export default function StreamPayDashboard() {
         return;
       }
 
+      let sessionIdHex: Hex;
+      let txHashHex: Hex | undefined;
+
       const manifestRoot: Hex = manifestData?.manifestRoot || manifestData?.merkleRoot;
       if (!manifestRoot || manifestRoot === ('0x' + '00'.repeat(32))) {
         setStatusMsg({ text: 'Cannot open session: manifest not loaded or has zero root. Ensure access service is running.', type: 'error' });
@@ -281,16 +296,89 @@ export default function StreamPayDashboard() {
       }
 
       if (networkMode === 'TESTNET') {
-        setStatusMsg({ text: 'Testnet mode requires wallet-signed transactions. Full wallet integration pending deployment.', type: 'warn' });
+        if (!isDeployed || !contractAddress || contractAddress === '0x') {
+          setStatusMsg({
+            text: 'Monad Testnet settlement contract is pending deployment (manifests/testnet.json settlementContract is null). Deploy contract to chain 10143 to execute on-chain transactions.',
+            type: 'warn',
+          });
+          return;
+        }
+
+        if (typeof window === 'undefined' || !(window as any).ethereum) {
+          setStatusMsg({ text: 'Injected Web3 wallet not found for Testnet transaction execution.', type: 'error' });
+          return;
+        }
+
+        const ephemeralSignerKey = generatePrivateKey();
+        const ephemeralSigner = privateKeyToAccount(ephemeralSignerKey);
+        const openedAt = Math.floor(Date.now() / 1000);
+
+        setStatusMsg({ text: 'Requesting wallet signatures (ERC-20 approval & EIP-712 session config)...', type: 'info' });
+
+        const walletClient = createWalletClient({
+          account: payerAddress,
+          transport: custom((window as any).ethereum),
+        });
+        const publicClient = createPublicClient({
+          transport: http(activeManifest.rpcHttp),
+        });
+
+        const res = await openSessionWithWallet({
+          walletClient,
+          publicClient,
+          settlement: contractAddress,
+          token: paymentTokenAddress,
+          payer: payerAddress,
+          recipient: recipientAddress,
+          signerAddress: ephemeralSigner.address as Address,
+          manifestRoot,
+          unitPrice: UNIT_PRICE,
+          maxBillable: 3600n,
+          deposit: depositUnits,
+          validSec: durationSec,
+          graceSec: 3600,
+          maxLead: MAX_LEAD,
+          maxCreditWindow: MAX_CREDIT_WINDOW_UNITS,
+          maxCreditSegments: MAX_CREDIT_SEGMENTS,
+          maxUnredeemedAmount: MAX_UNREDEEMED,
+          creatorKey: ANVIL_ACCOUNTS.creator,
+          chainId: activeManifest.chainId,
+        });
+
+        sessionIdHex = res.sessionId;
+        txHashHex = res.txHash;
+        setLastTxHash(res.txHash);
+
+        const newSession: StreamSessionState = {
+          sessionId: sessionIdHex,
+          payer: payerAddress,
+          sessionSigner: ephemeralSigner.address as Hex,
+          recipient: recipientAddress,
+          depositAmount: depositUnits,
+          maxDurationSec: durationSec,
+          openedAt,
+          settledAmount: 0n,
+          highestCumulativeUnits: 0n,
+          status: 'OPEN',
+          txHash: txHashHex,
+          signerKey: ephemeralSignerKey,
+        };
+
+        setSession(newSession);
+        setCurrentSegment(0);
+        setCumulativeUnits(0n);
+        setVoucherLogs([]);
+
+        setStatusMsg({
+          text: `Testnet Session Opened On-Chain! ID: ${sessionIdHex.slice(0, 10)}... Tx: ${txHashHex?.slice(0, 10)}... Signer: ${ephemeralSigner.address.slice(0, 10)}...`,
+          type: 'success',
+        });
         return;
       }
 
       const ephemeralSignerKey = generatePrivateKey();
       const ephemeralSigner = privateKeyToAccount(ephemeralSignerKey);
       const openedAt = Math.floor(Date.now() / 1000);
-
-      let sessionIdHex: Hex;
-      let txHashHex: Hex | undefined;
 
       if (isDeployed) {
         setStatusMsg({ text: 'Executing real openWithSignature transaction on-chain...', type: 'info' });
@@ -501,13 +589,35 @@ export default function StreamPayDashboard() {
         cumulativeUnits,
       }));
 
-      if (networkMode !== 'LOCAL') {
-        setStatusMsg({ text: 'Testnet checkpoint requires wallet integration', type: 'warn' });
-        return;
-      }
-
       let txHash: Hex = ('0x' + '00'.repeat(32)) as Hex;
-      if (isDeployed) {
+      if (networkMode === 'TESTNET') {
+        if (!payerAddress) {
+          setStatusMsg({ text: 'Connect wallet first', type: 'error' });
+          return;
+        }
+        if (!isDeployed) {
+          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          return;
+        }
+        setStatusMsg({ text: 'Submitting real checkpoint transaction via wallet on Monad Testnet...', type: 'info' });
+        const walletClient = createWalletClient({
+          account: payerAddress,
+          transport: custom((window as any).ethereum),
+        });
+        const publicClient = createPublicClient({
+          transport: http(activeManifest.rpcHttp),
+        });
+        txHash = await checkpointWithWallet({
+          walletClient,
+          publicClient,
+          settlement: contractAddress,
+          sessionId: session.sessionId!,
+          cumulativeUnits,
+          voucherSig: lastSig,
+          account: payerAddress,
+        });
+        setLastTxHash(txHash);
+      } else if (isDeployed) {
         txHash = await checkpoint({
           rpc: activeManifest.rpcHttp,
           settlement: contractAddress,
@@ -570,8 +680,8 @@ export default function StreamPayDashboard() {
         hlsRef.current = null;
       }
 
-      if (networkMode !== 'LOCAL' || !session.signerKey) {
-        setStatusMsg({ text: 'Testnet close requires wallet integration', type: 'warn' });
+      if (!session.signerKey) {
+        setStatusMsg({ text: 'Session signer key not available', type: 'error' });
         return;
       }
 
@@ -584,7 +694,35 @@ export default function StreamPayDashboard() {
       }));
 
       let txHash: Hex = ('0x' + '00'.repeat(32)) as Hex;
-      if (isDeployed) {
+      if (networkMode === 'TESTNET') {
+        if (!payerAddress) {
+          setStatusMsg({ text: 'Connect wallet first', type: 'error' });
+          return;
+        }
+        if (!isDeployed) {
+          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          return;
+        }
+        setStatusMsg({ text: 'Submitting real closeCooperative transaction via wallet on Monad Testnet...', type: 'info' });
+        const walletClient = createWalletClient({
+          account: payerAddress,
+          transport: custom((window as any).ethereum),
+        });
+        const publicClient = createPublicClient({
+          transport: http(activeManifest.rpcHttp),
+        });
+        txHash = await closeCooperativeWithWallet({
+          walletClient,
+          publicClient,
+          settlement: contractAddress,
+          sessionId: session.sessionId!,
+          cumulativeUnits,
+          voucherSig: lastSig,
+          creatorKey: ANVIL_ACCOUNTS.creator,
+          account: payerAddress,
+        });
+        setLastTxHash(txHash);
+      } else if (isDeployed) {
         setStatusMsg({ text: 'Submitting real closeCooperative transaction on-chain...', type: 'info' });
         txHash = await closeCooperative({
           rpc: activeManifest.rpcHttp,

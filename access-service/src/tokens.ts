@@ -1,8 +1,9 @@
 import crypto from 'crypto';
 import { type Hex } from 'viem';
 import { config } from './config';
+import { getOrInitTokenSecret, saveAllDurableState, syncFromDisk } from './durableStore';
 
-const SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
+const SECRET = getOrInitTokenSecret();
 
 export interface TokenPayload {
   sid: string;
@@ -39,6 +40,7 @@ export function mintAccessToken(
 }
 
 const consumed = new Map<string, number>();
+export const consumedTokensMap = consumed;
 
 /**
  * Verify a token's HMAC and expiry without consuming it.
@@ -55,6 +57,7 @@ export function verifyToken(token: string, nowMs = Date.now()): TokenPayload | n
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenPayload;
     const nowS = Math.floor(nowMs / 1000);
     if (typeof p.exp !== 'number' || p.exp < nowS) return null;
+    syncFromDisk();
     if (consumed.has(sig)) return null;
     return p;
   } catch { return null; }
@@ -72,6 +75,7 @@ function markConsumed(token: string, nowMs = Date.now()): void {
   // Parse payload for expiry
   const payload = verifyToken(token, nowMs);
   consumed.set(sig, payload?.exp ?? nowS + 60);
+  saveAllDurableState();
 }
 
 /**

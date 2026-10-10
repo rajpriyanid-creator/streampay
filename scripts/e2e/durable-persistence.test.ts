@@ -1,0 +1,287 @@
+/**
+ * StreamPay v2.5 — Durable Persistence, Restart Recovery & Dual-Instance E2E Test
+ *
+ * Verifies:
+ * 1. Restart Recovery: State (vouchers, reservations, completed deliveries) survives process restart.
+ * 2. Replay Protection After Restart: Old tokens and completed segments cannot be replayed after restart.
+ * 3. Multi-Instance Sharing: Instance A mints token; Instance B consumes it; Instance A rejects replay.
+ * 4. TOKEN_SECRET Validation: Non-local / production strictly requires >=32 char secret at startup.
+ */
+
+import { spawn, ChildProcess } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+import { privateKeyToAccount } from 'viem/accounts';
+import { type Hex } from 'viem';
+
+const TEST_DIR = path.join(__dirname, '../../.test-durable-data');
+const PORT_A = 4071;
+const PORT_B = 4072;
+const ACCESS_URL_A = `http://localhost:${PORT_A}`;
+const ACCESS_URL_B = `http://localhost:${PORT_B}`;
+
+// Shared secret for multi-instance tests (at least 32 characters)
+const SHARED_SECRET = 'streampay_secure_shared_token_secret_for_cluster_testing_32chars';
+
+// Ephemeral keys for signing vouchers
+const signerAccount = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
+
+async function waitForServer(url: string, timeoutMs = 8000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${url}/health`);
+      if (res.ok) {
+        const body: any = await res.json();
+        if (body.ready) return true;
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+function spawnInstance(port: number, envOverrides: Record<string, string> = {}): ChildProcess {
+  return spawn(
+    'node',
+    [path.join(__dirname, '../../access-service/dist/server.js')],
+    {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        SIMULATION_MODE: 'true',
+        SETTLEMENT_ADDRESS: '',
+        NETWORK: 'local',
+        DATA_STORE_DIR: TEST_DIR,
+        ENABLE_TEST_CLOCK: 'true',
+        ...envOverrides,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+}
+
+async function signVoucher(sessionId: Hex, cumulativeUnits: bigint) {
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: 31337n,
+    verifyingContract: '0x0000000000000000000000000000000000000000' as Hex,
+  } as const;
+
+  const types = {
+    Voucher: [
+      { name: 'sessionId', type: 'bytes32' },
+      { name: 'cumulativeUnits', type: 'uint64' },
+    ],
+  } as const;
+
+  return signerAccount.signTypedData({
+    domain,
+    types,
+    primaryType: 'Voucher',
+    message: { sessionId, cumulativeUnits },
+  });
+}
+
+async function runTests() {
+  console.log('\n🧪 Starting StreamPay Durable Persistence & Multi-Instance E2E Tests...\n');
+
+  // Clean test directory
+  if (fs.existsSync(TEST_DIR)) {
+    fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  }
+  fs.mkdirSync(TEST_DIR, { recursive: true });
+
+  // ────────────────────────────────────────────────────────────────
+  // TEST 1: High-entropy TOKEN_SECRET validation in non-local & production
+  // ────────────────────────────────────────────────────────────────
+  console.log('Test 1: Verifying startup validation for TOKEN_SECRET outside local mode...');
+
+  // 1a: Missing TOKEN_SECRET in testnet
+  const p1 = spawnInstance(PORT_A, { NETWORK: 'monad-testnet', TOKEN_SECRET: '', SIMULATION_MODE: 'false' });
+  const code1: number = await new Promise((res) => p1.on('exit', (c) => res(c ?? 1)));
+  if (code1 !== 1) throw new Error(`Expected missing TOKEN_SECRET on testnet to exit with 1, got ${code1}`);
+  console.log('  ✅ Missing TOKEN_SECRET on testnet rejected with exit code 1');
+
+  // 1b: Short TOKEN_SECRET in production
+  const p2 = spawnInstance(PORT_A, { NODE_ENV: 'production', TOKEN_SECRET: 'short_secret', SIMULATION_MODE: 'false', ENABLE_TEST_CLOCK: 'false' });
+  const code2: number = await new Promise((res) => p2.on('exit', (c) => res(c ?? 1)));
+  if (code2 !== 1) throw new Error(`Expected short TOKEN_SECRET in production to exit with 1, got ${code2}`);
+  console.log('  ✅ Short TOKEN_SECRET (<32 chars) rejected with exit code 1');
+
+  // ────────────────────────────────────────────────────────────────
+  // TEST 2: Process Restart Recovery & Replay Protection
+  // ────────────────────────────────────────────────────────────────
+  console.log('\nTest 2: Verifying session state persistence & restart recovery...');
+
+  const sessionId: Hex = ('0x' + 'aa'.repeat(32)) as Hex;
+  const sessionSigner = signerAccount.address;
+  const recipient: Hex = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+  const contractAddress: Hex = '0x0000000000000000000000000000000000000000';
+
+  let savedContentUrl = '';
+  let sig0: Hex = '0x';
+
+  // Spawn Instance 1
+  const proc1 = spawnInstance(PORT_A, { TOKEN_SECRET: SHARED_SECRET });
+  try {
+    const ready1 = await waitForServer(ACCESS_URL_A);
+    if (!ready1) throw new Error('Instance 1 failed to start');
+
+    // Request segment 0
+    sig0 = await signVoucher(sessionId, 2n);
+    const gateRes1 = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 0,
+        voucher: { sessionId, cumulativeUnits: '2', signature: sig0 },
+      }),
+    });
+
+    const gateData1: any = await gateRes1.json();
+    if (!gateRes1.ok || !gateData1.success) {
+      throw new Error(`Gate request failed on Instance 1: ${JSON.stringify(gateData1)}`);
+    }
+    savedContentUrl = gateData1.contentUrl;
+    console.log('  ✅ Segment 0 token granted on Instance 1');
+
+    // Consume and deliver segment 0
+    const contentRes1 = await fetch(`${ACCESS_URL_A}${savedContentUrl}`);
+    if (!contentRes1.ok) throw new Error(`Content fetch failed: ${contentRes1.status}`);
+    const bytes1 = await contentRes1.arrayBuffer();
+    if (bytes1.byteLength === 0) throw new Error('Empty media bytes received');
+    console.log(`  ✅ Segment 0 content delivered (${bytes1.byteLength} bytes)`);
+
+    // Verify voucher state on Instance 1
+    const vRes1 = await fetch(`${ACCESS_URL_A}/api/vouchers`);
+    const vData1: any = await vRes1.json();
+    const stored1 = vData1.vouchers.find((v: any) => v.sessionId.toLowerCase() === sessionId.toLowerCase());
+    if (!stored1 || stored1.totalServedSegments !== 1) {
+      throw new Error(`Voucher store incomplete on Instance 1: ${JSON.stringify(vData1)}`);
+    }
+    console.log('  ✅ In-memory voucher confirmed totalServedSegments=1 on Instance 1');
+  } finally {
+    proc1.kill('SIGKILL');
+  }
+
+  // Confirm state file was written
+  const statePath = path.join(TEST_DIR, 'state.json');
+  if (!fs.existsSync(statePath)) throw new Error(`state.json was not created at ${statePath}`);
+  console.log('  ✅ Confirmed state.json durably persisted to disk');
+
+  // Spawn Instance 1 RESTART (Instance 2 on same port and data directory)
+  console.log('\nRestarting access service to test recovery...');
+  const procRestart = spawnInstance(PORT_A, { TOKEN_SECRET: SHARED_SECRET });
+  try {
+    const readyRestart = await waitForServer(ACCESS_URL_A);
+    if (!readyRestart) throw new Error('Restarted instance failed to start');
+
+    // Query vouchers after restart
+    const vResAfter = await fetch(`${ACCESS_URL_A}/api/vouchers`);
+    const vDataAfter: any = await vResAfter.json();
+    const storedAfter = vDataAfter.vouchers.find((v: any) => v.sessionId.toLowerCase() === sessionId.toLowerCase());
+    if (!storedAfter || storedAfter.totalServedSegments !== 1 || storedAfter.highestCumulativeUnits !== '2') {
+      throw new Error(`Failed to recover voucher state after restart: ${JSON.stringify(vDataAfter)}`);
+    }
+    console.log('  ✅ Recovered voucher state after restart: highestUnits=2, totalServedSegments=1');
+
+    // Replay protection check 1: Old consumed token rejected
+    const replayContent = await fetch(`${ACCESS_URL_A}${savedContentUrl}`);
+    if (replayContent.status !== 403) {
+      throw new Error(`Expected replay of consumed token to return 403, got ${replayContent.status}`);
+    }
+    console.log('  ✅ Replay of consumed token after restart correctly rejected (403)');
+
+    // Replay protection check 2: Re-request for already completed segment 0 rejected
+    const retryGate = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 0,
+        voucher: { sessionId, cumulativeUnits: '2', signature: sig0 },
+      }),
+    });
+    if (retryGate.status !== 400 && retryGate.status !== 402 && retryGate.status !== 409) {
+      throw new Error(`Expected completed segment re-request to be rejected, got ${retryGate.status}`);
+    }
+    console.log('  ✅ Re-request for already completed segment rejected after restart (status 402/400)');
+  } finally {
+    procRestart.kill('SIGKILL');
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // TEST 3: Multi-Instance Cluster Sharing & Replay Coordination
+  // ────────────────────────────────────────────────────────────────
+  console.log('\nTest 3: Verifying multi-instance token sharing and cross-instance replay protection...');
+
+  const procA = spawnInstance(PORT_A, { TOKEN_SECRET: SHARED_SECRET });
+  const procB = spawnInstance(PORT_B, { TOKEN_SECRET: SHARED_SECRET });
+
+  try {
+    const readyA = await waitForServer(ACCESS_URL_A);
+    const readyB = await waitForServer(ACCESS_URL_B);
+    if (!readyA || !readyB) throw new Error('Dual instances failed to start');
+
+    // Instance A mints token for segment 1
+    const sig1 = await signVoucher(sessionId, 4n);
+    const gateResA = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 1,
+        voucher: { sessionId, cumulativeUnits: '4', signature: sig1 },
+      }),
+    });
+    const gateDataA: any = await gateResA.json();
+    if (!gateResA.ok || !gateDataA.success) {
+      throw new Error(`Instance A failed to issue token for segment 1: ${JSON.stringify(gateDataA)}`);
+    }
+    console.log('  ✅ Instance A issued segment 1 token');
+
+    // Instance B consumes the token and serves the media bytes
+    const contentResB = await fetch(`${ACCESS_URL_B}${gateDataA.contentUrl}`);
+    if (!contentResB.ok) throw new Error(`Instance B failed to validate token issued by Instance A: ${contentResB.status}`);
+    const bytesB = await contentResB.arrayBuffer();
+    if (bytesB.byteLength === 0) throw new Error('Empty media bytes from Instance B');
+    console.log(`  ✅ Instance B validated & delivered content with Instance A token (${bytesB.byteLength} bytes)`);
+
+    // Instance A now rejects replay of that same token
+    const replayResA = await fetch(`${ACCESS_URL_A}${gateDataA.contentUrl}`);
+    if (replayResA.status !== 403) {
+      throw new Error(`Expected Instance A to reject token consumed by Instance B, got ${replayResA.status}`);
+    }
+    console.log('  ✅ Instance A rejected replay of token consumed by Instance B (cross-instance single-use)');
+  } finally {
+    procA.kill('SIGKILL');
+    procB.kill('SIGKILL');
+    // Cleanup test data
+    fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  }
+
+  console.log('\n🎉 ALL Durable Persistence & Multi-Instance Tests PASSED!\n');
+}
+
+runTests().catch((err) => {
+  console.error('\n❌ Durable Persistence Tests FAILED:', err);
+  process.exit(1);
+});

@@ -281,3 +281,217 @@ export async function closeCooperative(p: {
   await pc.waitForTransactionReceipt({ hash: txHash });
   return txHash;
 }
+
+// ─── Wallet-Client Based Lifecycle Helpers (Testnet / Injected Wallet) ───
+
+export const sessionConfigTypes = {
+  SessionConfig: [
+    { name: 'payer', type: 'address' },
+    { name: 'sessionSigner', type: 'address' },
+    { name: 'offerDigest', type: 'bytes32' },
+    { name: 'initialDeposit', type: 'uint256' },
+    { name: 'maxLeadUnits', type: 'uint64' },
+    { name: 'validUntil', type: 'uint64' },
+    { name: 'redemptionGraceSeconds', type: 'uint64' },
+    { name: 'nonce', type: 'uint256' },
+  ],
+} as const;
+
+export async function openSessionWithWallet(p: {
+  walletClient: any;
+  publicClient: any;
+  settlement: Address;
+  token: Address;
+  payer: Address;
+  recipient: Address;
+  signerAddress: Address;
+  manifestRoot: Hex;
+  contentIdHash?: Hex;
+  pricingPolicyHash?: Hex;
+  unitPrice: bigint;
+  maxBillable: bigint;
+  deposit: bigint;
+  validSec: number;
+  graceSec: number;
+  maxLead: bigint;
+  maxCreditWindow: bigint;
+  maxCreditSegments: number;
+  maxUnredeemedAmount: bigint;
+  creatorKey?: Hex;
+  offerSignature?: Hex;
+  chainId: number;
+  nonce?: bigint;
+}) {
+  const pc = p.publicClient;
+  const payer = p.payer;
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const nonce = p.nonce !== undefined ? p.nonce : BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
+
+  // 1. Ensure ERC-20 allowance via wallet
+  const allow = (await pc.readContract({
+    address: p.token,
+    abi: approveAbi,
+    functionName: 'allowance',
+    args: [payer, p.settlement],
+  })) as bigint;
+
+  if (allow < p.deposit) {
+    const approveTx = await p.walletClient.writeContract({
+      address: p.token,
+      abi: approveAbi,
+      functionName: 'approve',
+      args: [p.settlement, p.deposit * 10n],
+      account: payer,
+    });
+    await pc.waitForTransactionReceipt({ hash: approveTx });
+  }
+
+  // 2. Prepare content offer
+  const offer = {
+    recipient: p.recipient,
+    token: p.token,
+    contentIdHash: p.contentIdHash || keccak256(Buffer.from('stream-content-monad-keynote-hd')),
+    pricingPolicyHash: p.pricingPolicyHash || CANONICAL_PRICING_POLICY_HASH,
+    unitPrice: p.unitPrice,
+    maxBillableUnits: p.maxBillable,
+    manifestRoot: p.manifestRoot,
+    maxCreditSegments: p.maxCreditSegments,
+    maxCreditWindowUnits: p.maxCreditWindow,
+    maxUnredeemedAmount: p.maxUnredeemedAmount,
+    offerNonce: now,
+    issuedAt: now,
+    expiresAt: now + 86400n,
+  };
+
+  const offerDigest = (await pc.readContract({
+    address: p.settlement,
+    abi: hashOfferAbi,
+    functionName: 'hashContentOffer',
+    args: [offer],
+  })) as Hex;
+
+  let offerSig: Hex;
+  if (p.offerSignature) {
+    offerSig = p.offerSignature;
+  } else if (p.creatorKey) {
+    const creator = privateKeyToAccount(p.creatorKey);
+    offerSig = await creator.sign({ hash: offerDigest });
+  } else {
+    throw new Error('Creator signature or creatorKey required to open session with offer');
+  }
+
+  // 3. Prepare session config
+  const cfg = {
+    payer,
+    sessionSigner: p.signerAddress,
+    offerDigest,
+    initialDeposit: p.deposit,
+    maxLeadUnits: p.maxLead,
+    validUntil: now + BigInt(p.validSec),
+    redemptionGraceSeconds: BigInt(p.graceSec),
+    nonce,
+  };
+
+  const cfgDigest = (await pc.readContract({
+    address: p.settlement,
+    abi: hashConfigAbi,
+    functionName: 'hashSessionConfig',
+    args: [cfg],
+  })) as Hex;
+
+  // 4. Wallet signs session config typed data
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(p.chainId),
+    verifyingContract: p.settlement,
+  };
+
+  const cfgSig = await p.walletClient.signTypedData({
+    account: payer,
+    domain,
+    types: sessionConfigTypes,
+    primaryType: 'SessionConfig',
+    message: cfg,
+  });
+
+  // 5. Submit openWithSignature transaction
+  const txHash = await p.walletClient.writeContract({
+    address: p.settlement,
+    abi: openAbi,
+    functionName: 'openWithSignature',
+    args: [offer, offerSig, cfg, cfgSig],
+    account: payer,
+  });
+
+  const receipt = await pc.waitForTransactionReceipt({ hash: txHash });
+  const sessionId = keccak256(encodeAbiParameters(parseAbiParameters('bytes32, bytes32'), [cfgDigest, offerDigest]));
+
+  return { txHash, sessionId, receipt, signerAddress: p.signerAddress };
+}
+
+export async function checkpointWithWallet(p: {
+  walletClient: any;
+  publicClient: any;
+  settlement: Address;
+  sessionId: Hex;
+  cumulativeUnits: bigint;
+  voucherSig: Hex;
+  account: Address;
+}): Promise<Hex> {
+  const txHash = await p.walletClient.writeContract({
+    address: p.settlement,
+    abi: checkpointAbi,
+    functionName: 'checkpoint',
+    args: [p.sessionId, { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }, p.voucherSig],
+    account: p.account,
+  });
+  await p.publicClient.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+
+export async function closeCooperativeWithWallet(p: {
+  walletClient: any;
+  publicClient: any;
+  settlement: Address;
+  sessionId: Hex;
+  cumulativeUnits: bigint;
+  voucherSig: Hex;
+  creatorKey?: Hex;
+  ackSig?: Hex;
+  account: Address;
+}): Promise<Hex> {
+  const pc = p.publicClient;
+  const voucherDigest = (await pc.readContract({
+    address: p.settlement,
+    abi: hashVoucherAbi,
+    functionName: 'hashVoucher',
+    args: [{ sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }],
+  })) as Hex;
+  const ack = { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits, voucherDigest };
+  const ackDigest = (await pc.readContract({
+    address: p.settlement,
+    abi: hashCloseAckAbi,
+    functionName: 'hashCloseAck',
+    args: [ack],
+  })) as Hex;
+
+  let finalAckSig: Hex;
+  if (p.ackSig) {
+    finalAckSig = p.ackSig;
+  } else if (p.creatorKey) {
+    finalAckSig = await privateKeyToAccount(p.creatorKey).sign({ hash: ackDigest });
+  } else {
+    throw new Error('Creator signature or creatorKey required to authorize cooperative close acknowledgment');
+  }
+
+  const txHash = await p.walletClient.writeContract({
+    address: p.settlement,
+    abi: closeCooperativeAbi,
+    functionName: 'closeCooperative',
+    args: [p.sessionId, { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }, p.voucherSig, ack, finalAckSig],
+    account: p.account,
+  });
+  await pc.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
