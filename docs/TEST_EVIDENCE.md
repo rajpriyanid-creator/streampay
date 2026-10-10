@@ -1,8 +1,8 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** `58178601121797b16870c0b587780e9809121a5b` (preceding source fixes: `80f0506124121d94de69d8a4980368bb583e726b`, `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
-**GitHub Actions Runs:** [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (Latest: **SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**), [Run #38071519229](https://github.com/rajpriyanid-creator/streampay/actions/runs/38071519229) (**SUCCESS**)  
+**Commit:** `f788688d130d0adb144968c2da332d0d776cc8a9` (preceding source fixes: `58178601121797b16870c0b587780e9809121a5b`, `80f0506124121d94de69d8a4980368bb583e726b`, `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
+**GitHub Actions Runs:** [Run #38076882199](https://github.com/rajpriyanid-creator/streampay/actions/runs/38076882199) (Latest: **SUCCESS**), [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (**SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
 > **Honesty note:** Only results that have been independently executed and observed are marked PASS.  
