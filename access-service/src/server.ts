@@ -381,8 +381,17 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
+    // Support controlled clock / short test TTL in local or simulation mode for deterministic testing
+    const allowTestTime = config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test';
+    const reqNowMs = allowTestTime && req.headers['x-test-simulated-time-ms']
+      ? Number(req.headers['x-test-simulated-time-ms'])
+      : Date.now();
+    const reqTtlSec = allowTestTime && req.headers['x-test-ttl-sec']
+      ? Number(req.headers['x-test-ttl-sec'])
+      : config.tokenTtlSec;
+
     // Generate candidate access token
-    const candidateToken = mintAccessToken(sessionId as Hex, targetStream, idx);
+    const candidateToken = mintAccessToken(sessionId as Hex, targetStream, idx, reqTtlSec, reqNowMs);
     const tokenSig = candidateToken.split('.')[1];
     const sessKey = (sessionId as string).toLowerCase();
 
@@ -394,8 +403,9 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       parsedVoucher.cumulativeUnits,
       candidateToken,
       tokenSig,
-      config.tokenTtlSec,
-      onChainSettledUnits
+      reqTtlSec,
+      onChainSettledUnits,
+      reqNowMs
     );
 
     if (!reserveCheck.allowed) {
@@ -466,8 +476,13 @@ app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: 
   }
   const segmentIndex = parseInt(match[1], 10);
 
+  const allowTestTime = config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test';
+  const reqNowMs = allowTestTime && req.headers['x-test-simulated-time-ms']
+    ? Number(req.headers['x-test-simulated-time-ms'])
+    : Date.now();
+
   // Consume token: verifies HMAC, expiry, streamId, and segment index
-  const consumption = consumeAccessToken(token, streamId, segmentIndex);
+  const consumption = consumeAccessToken(token, streamId, segmentIndex, reqNowMs);
   if (!consumption.valid || !consumption.record) {
     res.status(403).json({ code: 'FORBIDDEN', error: 'Forbidden', reason: consumption.reason });
     return;

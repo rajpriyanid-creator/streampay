@@ -13,19 +13,29 @@ export interface TokenPayload {
 
 const b64u = (b: Buffer) => b.toString('base64url');
 
-export function issueToken(p: Omit<TokenPayload, 'exp'>): string {
-  const payload: TokenPayload = { ...p, exp: Math.floor(Date.now() / 1000) + config.tokenTtlSec };
+export function issueToken(
+  p: Omit<TokenPayload, 'exp'>,
+  ttlSec = config.tokenTtlSec,
+  nowMs = Date.now()
+): string {
+  const payload: TokenPayload = { ...p, exp: Math.floor(nowMs / 1000) + ttlSec };
   const body = b64u(Buffer.from(JSON.stringify(payload)));
   const sig = b64u(crypto.createHmac('sha256', SECRET).update(body).digest());
   return `${body}.${sig}`;
 }
 
-export function mintAccessToken(sessionId: Hex, streamId: string, segmentIndex: number): string {
+export function mintAccessToken(
+  sessionId: Hex,
+  streamId: string,
+  segmentIndex: number,
+  ttlSec = config.tokenTtlSec,
+  nowMs = Date.now()
+): string {
   return issueToken({
     sid: sessionId,
     stream: streamId,
     idx: segmentIndex,
-  });
+  }, ttlSec, nowMs);
 }
 
 const consumed = new Map<string, number>();
@@ -34,7 +44,7 @@ const consumed = new Map<string, number>();
  * Verify a token's HMAC and expiry without consuming it.
  * Returns the payload if valid, null otherwise.
  */
-export function verifyToken(token: string): TokenPayload | null {
+export function verifyToken(token: string, nowMs = Date.now()): TokenPayload | null {
   const [body, sig] = String(token || '').split('.');
   if (!body || !sig) return null;
   const expected = crypto.createHmac('sha256', SECRET).update(body).digest();
@@ -43,7 +53,7 @@ export function verifyToken(token: string): TokenPayload | null {
   if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenPayload;
-    const nowS = Math.floor(Date.now() / 1000);
+    const nowS = Math.floor(nowMs / 1000);
     if (typeof p.exp !== 'number' || p.exp < nowS) return null;
     if (consumed.has(sig)) return null;
     return p;
@@ -53,14 +63,14 @@ export function verifyToken(token: string): TokenPayload | null {
 /**
  * Mark a token as consumed (single-use enforcement).
  */
-function markConsumed(token: string): void {
+function markConsumed(token: string, nowMs = Date.now()): void {
   const [, sig] = String(token || '').split('.');
   if (!sig) return;
-  const nowS = Math.floor(Date.now() / 1000);
+  const nowS = Math.floor(nowMs / 1000);
   // Garbage collect expired entries
   for (const [k, e] of consumed) if (e < nowS) consumed.delete(k);
   // Parse payload for expiry
-  const payload = verifyToken(token);
+  const payload = verifyToken(token, nowMs);
   consumed.set(sig, payload?.exp ?? nowS + 60);
 }
 
@@ -77,10 +87,11 @@ function markConsumed(token: string): void {
 export function consumeAccessToken(
   token: string,
   expectedStreamId: string,
-  expectedSegmentIndex: number
+  expectedSegmentIndex: number,
+  nowMs = Date.now()
 ): { valid: boolean; reason?: string; record?: TokenPayload } {
   // Step 1: Verify token (HMAC, expiry, not already consumed)
-  const payload = verifyToken(token);
+  const payload = verifyToken(token, nowMs);
   if (!payload) {
     return { valid: false, reason: 'Invalid, expired, or already consumed access token' };
   }
@@ -98,7 +109,7 @@ export function consumeAccessToken(
   }
 
   // Step 4: All checks passed — NOW consume the token
-  markConsumed(token);
+  markConsumed(token, nowMs);
 
   return {
     valid: true,

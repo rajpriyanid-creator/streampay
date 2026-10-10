@@ -397,8 +397,8 @@ async function main() {
   }
   console.log(`  ✅ Segment 1 delivered and verified post-checkpoint (SHA-256: ${sha1})`);
 
-  // 10. Failed / Expired delivery retry verification
-  console.log('\nStep 10: Testing same-voucher retry for undelivered segment...');
+  // 10. Failed / Expired delivery retry verification with deterministic controlled clock
+  console.log('\nStep 10: Testing same-voucher retry for expired/undelivered segment...');
   const { sessionId: retrySessionId, signerAddress: retrySigner } = await openSession({
     rpc: RPC, settlement, token, creatorKey: CREATOR_KEY, payerKey: PAYER_KEY, signerKey: SIGNER_KEY,
     recipient,
@@ -420,10 +420,18 @@ async function main() {
     rpc: RPC, settlement, signerKey: SIGNER_KEY, sessionId: retrySessionId, cumulativeUnits: 2n,
   });
 
-  // Request token 1
+  // Step 10.1: Controlled clock base and test TTL
+  const baseTimeMs = 1700000000000;
+  const testTtlSec = 30;
+
+  // Step 10.2: Request initial Token A at baseTimeMs
   const firstReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-test-simulated-time-ms': baseTimeMs.toString(),
+      'x-test-ttl-sec': testTtlSec.toString(),
+    },
     body: JSON.stringify({
       sessionId: retrySessionId,
       sessionSigner: retrySigner,
@@ -435,13 +443,44 @@ async function main() {
   });
   if (!firstReqRes.ok) throw new Error(`First gate request failed: ${firstReqRes.status}`);
   const firstGateData = await firstReqRes.json();
-  const token1 = firstGateData.segmentToken;
+  const tokenA = firstGateData.segmentToken;
+  if (!tokenA) throw new Error('Token A was not issued');
+  console.log('  ✅ Step 10.2: Initial Token A granted for Segment 0');
 
-  // Simulate undelivered token: token 1 is never consumed at /content
-  // Retry segment 0 with the EXACT same voucher (cumulativeUnits: 2)
+  // Step 10.3: Verify that an immediate duplicate request before expiry reuses Token A (active idempotency branch)
+  const dupReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-test-simulated-time-ms': (baseTimeMs + 5000).toString(),
+      'x-test-ttl-sec': testTtlSec.toString(),
+    },
+    body: JSON.stringify({
+      sessionId: retrySessionId,
+      sessionSigner: retrySigner,
+      contractAddress: settlement,
+      streamId: 'monad-keynote-hd',
+      segmentIndex: 0,
+      voucher: { sessionId: retrySessionId, cumulativeUnits: '2', signature: retryVoucherSig },
+    }),
+  });
+  const dupGateData = await dupReqRes.json();
+  if (dupGateData.segmentToken !== tokenA) {
+    throw new Error('Unexpired duplicate request should have reused active Token A');
+  }
+  console.log('  ✅ Step 10.3: Active unexpired duplicate request correctly returned existing Token A');
+
+  // Step 10.4: Advance clock past expiry (baseTimeMs + 35s > 30s TTL)
+  // Token A was never consumed and expires. Pruning frees the reservation.
+  // Retry with the EXACT same voucher (cumulativeUnits: 2)
+  const expiredTimeMs = baseTimeMs + 35000;
   const retryReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-test-simulated-time-ms': expiredTimeMs.toString(),
+      'x-test-ttl-sec': testTtlSec.toString(),
+    },
     body: JSON.stringify({
       sessionId: retrySessionId,
       sessionSigner: retrySigner,
@@ -456,22 +495,42 @@ async function main() {
   if (!retryGateData.granted && !retryGateData.success) {
     throw new Error('Retry was rejected even though segment was never delivered');
   }
-  console.log('  ✅ Retry permitted: Same voucher for undelivered segment granted replacement token');
+  const tokenB = retryGateData.segmentToken;
+  if (!tokenB) throw new Error('Token B was not issued on retry');
+  if (tokenB === tokenA) {
+    throw new Error('Expected replacement Token B to differ from expired Token A, but received identical token');
+  }
+  console.log('  ✅ Step 10.4: Expired reservation pruned; safe retry issued replacement Token B (Token B != Token A)');
 
-  // Fetch content with the retry token
-  const contentResRetry = await fetch(`${ACCESS_URL}${retryGateData.contentUrl}`);
-  if (!contentResRetry.ok) throw new Error(`Failed to fetch retry content: ${contentResRetry.status}`);
+  // Step 10.5: Verify that expired Token A is strictly rejected at /content
+  const expiredContentRes = await fetch(`${ACCESS_URL}/api/access/content/monad-keynote-hd/segment_0.ts?token=${encodeURIComponent(tokenA)}`, {
+    headers: { 'x-test-simulated-time-ms': expiredTimeMs.toString() },
+  });
+  if (expiredContentRes.status !== 403) {
+    throw new Error(`Expected 403 FORBIDDEN for expired Token A, got ${expiredContentRes.status}`);
+  }
+  console.log('  ✅ Step 10.5: Consumption of expired Token A strictly rejected with 403 Forbidden');
+
+  // Step 10.6: Fetch content successfully using Token B
+  const contentResRetry = await fetch(`${ACCESS_URL}${retryGateData.contentUrl}`, {
+    headers: { 'x-test-simulated-time-ms': expiredTimeMs.toString() },
+  });
+  if (!contentResRetry.ok) throw new Error(`Failed to fetch retry content with Token B: ${contentResRetry.status}`);
   const bufRetry = Buffer.from(await contentResRetry.arrayBuffer());
   const shaRetry = ('0x' + crypto.createHash('sha256').update(bufRetry).digest('hex')) as Hex;
   if (shaRetry.toLowerCase() !== seg0.segmentSha256.toLowerCase()) {
     throw new Error('Retried segment content SHA-256 mismatch');
   }
-  console.log('  ✅ Delivery succeeded on retry: Media bytes verified');
+  console.log(`  ✅ Step 10.6: Delivery succeeded with replacement Token B: Media bytes SHA-256 match (${shaRetry})`);
 
-  // Segment 0 is now delivered. Requesting it again with the same voucher must now fail!
+  // Step 10.7: Segment 0 is now delivered and finalized. Re-requesting with the same voucher must now fail!
   const thirdReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-test-simulated-time-ms': (expiredTimeMs + 1000).toString(),
+      'x-test-ttl-sec': testTtlSec.toString(),
+    },
     body: JSON.stringify({
       sessionId: retrySessionId,
       sessionSigner: retrySigner,
@@ -484,7 +543,7 @@ async function main() {
   if (thirdReqRes.status !== 400 && thirdReqRes.status !== 402) {
     throw new Error(`Expected rejection for already-delivered segment, got ${thirdReqRes.status}`);
   }
-  console.log('  ✅ Duplicate delivery rejected: Already delivered segment rejected on subsequent attempt');
+  console.log('  ✅ Step 10.7: Duplicate delivery rejected: Already delivered segment rejected on subsequent attempt');
 
   // 11. Cooperative session close & refund
   console.log('\nStep 11: Cooperatively closing session on-chain & refunding excess escrow...');

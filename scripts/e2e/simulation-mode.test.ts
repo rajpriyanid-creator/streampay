@@ -154,6 +154,151 @@ async function main() {
     }
     console.log(`  ✅ Verified media bytes delivered in simulation mode (SHA-256: ${actualSha})`);
 
+    // 7. Expired token retry verification under controlled clock in simulation mode
+    console.log('\nStep 6: Testing expired-token replacement under controlled clock in simulation mode...');
+    const simSignature1 = await simAccount.signTypedData({
+      domain: voucherDomain,
+      types: voucherTypes,
+      primaryType: 'Voucher',
+      message: {
+        sessionId: simSessionId,
+        cumulativeUnits: 4n,
+      },
+    });
+
+    const baseTimeMs = 1700000000000;
+    const testTtlSec = 20;
+
+    // 6.1: Initial token A at baseTimeMs
+    const reqA = await fetch(`${ACCESS_URL}/api/access/segment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-simulated-time-ms': baseTimeMs.toString(),
+        'x-test-ttl-sec': testTtlSec.toString(),
+      },
+      body: JSON.stringify({
+        sessionId: simSessionId,
+        sessionSigner: simAccount.address,
+        contractAddress: simContract,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 1,
+        voucher: {
+          sessionId: simSessionId,
+          cumulativeUnits: '4',
+          signature: simSignature1,
+        },
+      }),
+    });
+    if (!reqA.ok) throw new Error(`Gate rejected segment 1 initial request: ${reqA.status}`);
+    const dataA = await reqA.json();
+    const tokenA = dataA.segmentToken;
+
+    // 6.2: Duplicate request before expiry reuses active token A
+    const reqDup = await fetch(`${ACCESS_URL}/api/access/segment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-simulated-time-ms': (baseTimeMs + 5000).toString(),
+        'x-test-ttl-sec': testTtlSec.toString(),
+      },
+      body: JSON.stringify({
+        sessionId: simSessionId,
+        sessionSigner: simAccount.address,
+        contractAddress: simContract,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 1,
+        voucher: {
+          sessionId: simSessionId,
+          cumulativeUnits: '4',
+          signature: simSignature1,
+        },
+      }),
+    });
+    const dataDup = await reqDup.json();
+    if (dataDup.segmentToken !== tokenA) {
+      throw new Error('Unexpired duplicate request should have reused active token A');
+    }
+    console.log('  ✅ Unexpired duplicate request correctly returned active token A');
+
+    // 6.3: Advance clock past expiry (baseTimeMs + 25s > 20s TTL)
+    const expiredTimeMs = baseTimeMs + 25000;
+    const reqB = await fetch(`${ACCESS_URL}/api/access/segment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-simulated-time-ms': expiredTimeMs.toString(),
+        'x-test-ttl-sec': testTtlSec.toString(),
+      },
+      body: JSON.stringify({
+        sessionId: simSessionId,
+        sessionSigner: simAccount.address,
+        contractAddress: simContract,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 1,
+        voucher: {
+          sessionId: simSessionId,
+          cumulativeUnits: '4',
+          signature: simSignature1,
+        },
+      }),
+    });
+    if (!reqB.ok) throw new Error(`Retry after expiry failed: ${reqB.status}`);
+    const dataB = await reqB.json();
+    const tokenB = dataB.segmentToken;
+    if (!tokenB || tokenB === tokenA) {
+      throw new Error('Expected replacement token B to differ from expired token A');
+    }
+    console.log('  ✅ Expired reservation pruned; replacement token B granted (tokenB != tokenA)');
+
+    // 6.4: Expired token A is rejected at /content
+    const expContentRes = await fetch(`${ACCESS_URL}/api/access/content/monad-keynote-hd/segment_1.ts?token=${encodeURIComponent(tokenA)}`, {
+      headers: { 'x-test-simulated-time-ms': expiredTimeMs.toString() },
+    });
+    if (expContentRes.status !== 403) {
+      throw new Error(`Expected 403 for expired token A, got ${expContentRes.status}`);
+    }
+    console.log('  ✅ Expired token A strictly rejected with 403 Forbidden');
+
+    // 6.5: Fetch content with replacement token B
+    const contentResB = await fetch(`${ACCESS_URL}${dataB.contentUrl}`, {
+      headers: { 'x-test-simulated-time-ms': expiredTimeMs.toString() },
+    });
+    if (!contentResB.ok) throw new Error(`Content route failed with token B: ${contentResB.status}`);
+    const bytesB = Buffer.from(await contentResB.arrayBuffer());
+    const shaB = ('0x' + crypto.createHash('sha256').update(bytesB).digest('hex')) as Hex;
+    const seg1 = manifest.segments[1];
+    if (shaB.toLowerCase() !== seg1.segmentSha256.toLowerCase()) {
+      throw new Error(`SHA-256 mismatch for segment 1! Expected ${seg1.segmentSha256}, got ${shaB}`);
+    }
+    console.log(`  ✅ Media bytes delivered and verified with token B (SHA-256: ${shaB})`);
+
+    // 6.6: Subsequent retry for delivered segment must fail
+    const reqDelivered = await fetch(`${ACCESS_URL}/api/access/segment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-simulated-time-ms': (expiredTimeMs + 1000).toString(),
+        'x-test-ttl-sec': testTtlSec.toString(),
+      },
+      body: JSON.stringify({
+        sessionId: simSessionId,
+        sessionSigner: simAccount.address,
+        contractAddress: simContract,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 1,
+        voucher: {
+          sessionId: simSessionId,
+          cumulativeUnits: '4',
+          signature: simSignature1,
+        },
+      }),
+    });
+    if (reqDelivered.status !== 400 && reqDelivered.status !== 402) {
+      throw new Error(`Expected rejection for already-delivered segment, got ${reqDelivered.status}`);
+    }
+    console.log('  ✅ Re-request for delivered segment rejected (no duplicate delivery)');
+
     console.log('\n🎉 Simulation Mode End-to-End Test PASSED!\n');
   } finally {
     serviceProc.kill('SIGTERM');

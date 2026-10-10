@@ -344,4 +344,77 @@ test('ReservationLedger Suite', async (t) => {
     assert.strictEqual(segReplayRes.allowed, false);
     assert.match(segReplayRes.reason!, /already delivered/);
   });
+
+  await t.test('13. Expired token replacement: expired reservation is pruned, replacement token allowed for same voucher, delivery finalizes, subsequent retry rejected', async () => {
+    ledger.clear();
+    const sessionId = '0xsession13';
+    const t0 = 1000000;
+    const ttlSec = 10;
+
+    // 1. Initial reservation at t0
+    const resA = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tokenA',
+      'sigA',
+      ttlSec,
+      0n,
+      t0
+    );
+    assert.strictEqual(resA.allowed, true);
+    assert.strictEqual(resA.isDuplicate, undefined);
+
+    // 2. Duplicate request before expiry (t0 + 5s) -> reuses unexpired token
+    const resDup = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tokenCandidate',
+      'sigCandidate',
+      ttlSec,
+      0n,
+      t0 + 5000
+    );
+    assert.strictEqual(resDup.allowed, true);
+    assert.strictEqual(resDup.isDuplicate, true);
+    assert.strictEqual(resDup.existingToken, 'tokenA');
+
+    // 3. Advance clock past expiry (t0 + 15s) -> reservation pruned, replacement token allowed
+    const t1 = t0 + 15000;
+    const resB = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tokenB',
+      'sigB',
+      ttlSec,
+      0n,
+      t1
+    );
+    assert.strictEqual(resB.allowed, true);
+    assert.strictEqual(resB.isDuplicate, undefined);
+    assert.notStrictEqual(resB.existingToken, 'tokenA');
+
+    // 4. Complete delivery using tokenB
+    await ledger.onDeliveryCompleted(sessionId, 'sigB', 0);
+
+    // 5. Subsequent attempt for same segment must now be rejected as already delivered
+    const resAfterDelivery = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tokenC',
+      'sigC',
+      ttlSec,
+      0n,
+      t1 + 1000
+    );
+    assert.strictEqual(resAfterDelivery.allowed, false);
+    assert.match(resAfterDelivery.reason!, /already delivered/);
+  });
 });

@@ -38,7 +38,7 @@ Evidence: Next.js 14.2 production bundle successfully compiled, linted, and stat
 
 ### Reservation Ledger Unit & Concurrency Suite (`node --test`)
 ```
-Status: PASS (12/12 tests pass, exit code 0)
+Status: PASS (13/13 tests pass, exit code 0)
 Location: access-service/dist/reservationStore.test.js
 Command: node --test access-service/dist/reservationStore.test.js
 Execution Time: 112 ms
@@ -56,7 +56,8 @@ Subtest Results:
   ✔ 10. Bounded Store Size: onDeliveryCompleted cleans state.reservations and prunes expired
   ✔ 11. Store Memory Safety: 1,000 successful deliveries maintain strictly bounded store size
   ✔ 12. Replay Protection: delivered tokens are recorded and cannot be re-reserved
-1..1 (tests: 12, pass: 12, fail: 0)
+  ✔ 13. Expired token replacement: expired reservation is pruned, replacement token allowed for same voucher, delivery finalizes, subsequent retry rejected
+1..1 (tests: 13, pass: 13, fail: 0)
 ```
 
 ### HTTP E2E Integration Suite (`node scripts/e2e/e2e.mjs`)
@@ -111,7 +112,7 @@ Step Verification:
   7. Consumed single-use token re-fetch returns 403 (Replay protection)
   8. Unknown stream (404), out of range (404), too low units (402), too high units (400) rejected
   9. Mismatched pricing policy on-chain returns 403 POLICY_MISMATCH
-  10. Same-voucher retry permitted for undelivered segment; delivery succeeds, subsequent re-request rejected
+  10. Expired token retry verified under controlled clock: unexpired duplicate reuses active Token A; advancing clock past TTL prunes reservation, safe retry issues replacement Token B (Token B != Token A); expired Token A rejected (403); delivery with Token B succeeds; subsequent duplicate request rejected
   11. On-chain checkpoint confirmed, synced with /api/session/checkpoint-sync, Segment 1 streamed & verified post-checkpoint, cooperative close & refund confirmed.
 ```
 
@@ -139,6 +140,7 @@ Verification Results:
   ✔ Step 3: Simulated session created & EIP-712 off-chain voucher signed
   ✔ Step 4: Access granted through simulation gate with valid single-use token
   ✔ Step 5: Media bytes fetched and cryptographically verified in pure simulation mode
+  ✔ Step 6: Expired token replacement verified under controlled clock in offline simulation mode (Token B != Token A, delivery verified, duplicate rejected)
 ```
 
 ---
