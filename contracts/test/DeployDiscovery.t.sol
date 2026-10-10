@@ -26,15 +26,18 @@ contract DeployDiscoveryTest is Test {
     /// @notice Proves MockUSDC cannot be mistaken for StreamPaySettlement.
     /// Calling paymentToken() or getSession() on MockUSDC reverts.
     function test_MockUSDC_CannotBeMistakenFor_Settlement() public {
+        bytes4 paymentTokenSelector = bytes4(keccak256("paymentToken()"));
+        bytes4 getSessionSelector = bytes4(keccak256("getSession(bytes32)"));
+
         // Attempting to call settlement paymentToken() selector on mockUSDC must revert
         (bool success, ) = address(mockUSDC).staticcall(
-            abi.encodeWithSelector(settlement.paymentToken.selector)
+            abi.encodeWithSelector(paymentTokenSelector)
         );
         assertFalse(success, "MockUSDC must not respond to settlement paymentToken() selector");
 
         // Attempting to call getSession selector on mockUSDC must revert
         (bool successSession, ) = address(mockUSDC).staticcall(
-            abi.encodeWithSelector(settlement.getSession.selector, bytes32(0))
+            abi.encodeWithSelector(getSessionSelector, bytes32(0))
         );
         assertFalse(successSession, "MockUSDC must not respond to getSession selector");
 

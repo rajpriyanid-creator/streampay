@@ -66,10 +66,7 @@ contract Deploy is Script {
         );
 
         string memory filePath = chainId == 31337 ? "../manifests/local.json" : "../manifests/deployment.json";
-        try vm.writeFile(filePath, json) {
-            console.log("Deployment artifact written to:", filePath);
-        } catch {
-            console.log("Notice: vm.writeFile not permitted or failed, artifact logged to console");
-        }
+        vm.writeFile(filePath, json);
+        console.log("Deployment artifact written to:", filePath);
     }
 }
