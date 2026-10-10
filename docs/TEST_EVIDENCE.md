@@ -1,8 +1,8 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** `43f8d70fc47028009d2b7ff9229ffbe946008cff`  
-**GitHub Actions Run:** [Run #38065915369](https://github.com/rajpriyanid-creator/streampay/actions/runs/38065915369) (Conclusion: **SUCCESS**)  
+**Commit:** `86189fa085ff8344d8d033936b4e2c14c31b5536`  
+**GitHub Actions Run:** [Run #38069704337](https://github.com/rajpriyanid-creator/streampay/actions/runs/38069704337) (Conclusion: **SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
 > **Honesty note:** Only results that have been independently executed and observed are marked PASS.  
