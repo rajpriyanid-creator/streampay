@@ -123,7 +123,7 @@ jobs:
           cat /tmp/lifecycle.log
 
           echo "Starting Access Service connected to local chain..."
-          PORT=4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT NETWORK=local node access-service/dist/server.js > /tmp/svc.log 2>&1 &
+          PORT=4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT NETWORK=local ENABLE_TEST_CLOCK=true node access-service/dist/server.js > /tmp/svc.log 2>&1 &
           SVC_PID=$!
           sleep 3
 

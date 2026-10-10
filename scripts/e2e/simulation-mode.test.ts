@@ -49,6 +49,7 @@ async function main() {
         SIMULATION_MODE: 'true',
         SETTLEMENT_ADDRESS: '',
         NETWORK: 'local',
+        ENABLE_TEST_CLOCK: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     }

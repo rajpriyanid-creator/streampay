@@ -381,14 +381,22 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // Support controlled clock / short test TTL in local or simulation mode for deterministic testing
-    const allowTestTime = config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test';
-    const reqNowMs = allowTestTime && req.headers['x-test-simulated-time-ms']
-      ? Number(req.headers['x-test-simulated-time-ms'])
-      : Date.now();
-    const reqTtlSec = allowTestTime && req.headers['x-test-ttl-sec']
-      ? Number(req.headers['x-test-ttl-sec'])
-      : config.tokenTtlSec;
+    // Support controlled clock / short test TTL only when explicitly enabled via ENABLE_TEST_CLOCK=true in non-production environments
+    const allowTestTime = config.ENABLE_TEST_CLOCK && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
+    let reqNowMs = Date.now();
+    if (allowTestTime && req.headers['x-test-simulated-time-ms']) {
+      const parsedTime = Number(req.headers['x-test-simulated-time-ms']);
+      if (Number.isFinite(parsedTime) && parsedTime >= 1577836800000 && parsedTime <= 4102444800000) {
+        reqNowMs = Math.floor(parsedTime);
+      }
+    }
+    let reqTtlSec = config.tokenTtlSec;
+    if (allowTestTime && req.headers['x-test-ttl-sec']) {
+      const parsedTtl = Number(req.headers['x-test-ttl-sec']);
+      if (Number.isFinite(parsedTtl) && parsedTtl >= 1 && parsedTtl <= 3600) {
+        reqTtlSec = Math.floor(parsedTtl);
+      }
+    }
 
     // Generate candidate access token
     const candidateToken = mintAccessToken(sessionId as Hex, targetStream, idx, reqTtlSec, reqNowMs);
@@ -476,10 +484,14 @@ app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: 
   }
   const segmentIndex = parseInt(match[1], 10);
 
-  const allowTestTime = config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test';
-  const reqNowMs = allowTestTime && req.headers['x-test-simulated-time-ms']
-    ? Number(req.headers['x-test-simulated-time-ms'])
-    : Date.now();
+  const allowTestTime = config.ENABLE_TEST_CLOCK && (config.NETWORK === 'local' || config.SIMULATION_MODE || process.env.NODE_ENV === 'test');
+  let reqNowMs = Date.now();
+  if (allowTestTime && req.headers['x-test-simulated-time-ms']) {
+    const parsedTime = Number(req.headers['x-test-simulated-time-ms']);
+    if (Number.isFinite(parsedTime) && parsedTime >= 1577836800000 && parsedTime <= 4102444800000) {
+      reqNowMs = Math.floor(parsedTime);
+    }
+  }
 
   // Consume token: verifies HMAC, expiry, streamId, and segment index
   const consumption = consumeAccessToken(token, streamId, segmentIndex, reqNowMs);

@@ -39,4 +39,5 @@ export const config = {
   REQUIRE_ONCHAIN_SESSION: process.env.REQUIRE_ONCHAIN_SESSION === 'true',
   NETWORK: process.env.NETWORK || 'local',
   SIMULATION_MODE: process.env.SIMULATION_MODE === 'true',
+  ENABLE_TEST_CLOCK: process.env.ENABLE_TEST_CLOCK === 'true',
 };
