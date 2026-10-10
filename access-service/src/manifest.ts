@@ -1,9 +1,10 @@
+import crypto from 'crypto';
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
 
 export const UNITS_PER_SEGMENT = 2n;
 export const SEGMENT_DURATION_SEC = 2;
 export const SEGMENT_COUNT = 20;
-export const UNIT_PRICE = 10_000n; // 0.01 USDC per unit (6 decimals)
+export const UNIT_PRICE = 500n; // 0.0005 USDC per unit (6 decimals). 1 unit = 1 second.
 
 export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
   Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
@@ -77,15 +78,55 @@ export function verifyMerkleProof(leaf: Hex, proof: Hex[], root: Hex): boolean {
 
 const manifestStore = new Map<string, any>();
 
+/**
+ * Generate deterministic segment content bytes for demo/testing.
+ * Each segment is a unique reproducible payload.
+ */
+function generateSegmentBytes(streamId: string, segmentIndex: number): Buffer {
+  // Deterministic pseudo-real segment content (188-byte TS packets)
+  const packetCount = 7; // 7 × 188 = 1316 bytes per segment
+  const buf = Buffer.alloc(packetCount * 188);
+  for (let p = 0; p < packetCount; p++) {
+    buf[p * 188] = 0x47; // TS sync byte
+    // Fill with deterministic data based on stream/segment/packet
+    const seed = crypto.createHash('sha256')
+      .update(`${streamId}-segment-${segmentIndex}-packet-${p}`)
+      .digest();
+    seed.copy(buf, p * 188 + 1, 0, Math.min(seed.length, 187));
+  }
+  return buf;
+}
+
+/**
+ * Compute real SHA-256 of segment bytes (NOT keccak256 of a label).
+ */
+function computeSegmentSha256(bytes: Buffer): Hex {
+  const hash = crypto.createHash('sha256').update(bytes).digest();
+  return `0x${hash.toString('hex')}` as Hex;
+}
+
+// Pre-generated segment bytes storage
+const segmentBytesStore = new Map<string, Buffer>();
+
+export function getSegmentBytes(streamId: string, segmentIndex: number): Buffer {
+  const key = `${streamId}:${segmentIndex}`;
+  if (!segmentBytesStore.has(key)) {
+    segmentBytesStore.set(key, generateSegmentBytes(streamId, segmentIndex));
+  }
+  return segmentBytesStore.get(key)!;
+}
+
 export function createDemoManifest(streamId: string) {
   const segments = [];
   let cum = 0n;
   const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
-  const defaultSha256 = keccak256(Buffer.from(`sha256-segment-payload-${streamId}`));
 
   for (let i = 0; i < SEGMENT_COUNT; i++) {
     cum += UNITS_PER_SEGMENT;
-    const segmentSha256 = keccak256(Buffer.from(`segment-bytes-${streamId}-${i}`));
+    // Generate actual segment bytes and compute real SHA-256
+    const segBytes = getSegmentBytes(streamId, i);
+    const segmentSha256 = computeSegmentSha256(segBytes);
+
     segments.push({
       index: i,
       durationUnits: SEGMENT_DURATION_SEC,
@@ -93,6 +134,7 @@ export function createDemoManifest(streamId: string) {
       cumulativeUnits: cum.toString(),
       contentHash: contentIdHash,
       segmentSha256,
+      byteLength: segBytes.length,
     });
   }
 
@@ -111,7 +153,7 @@ export function createDemoManifest(streamId: string) {
     title: 'Monad StreamPay HD Demo Video',
     totalSegments: segments.length,
     totalDurationSec: segments.length * SEGMENT_DURATION_SEC,
-    unitPriceUSDC: '0.01',
+    unitPriceUSDC: '0.0005',
     unitPrice: UNIT_PRICE.toString(),
     merkleRoot: treeLayers[treeLayers.length - 1][0],
     segments,
@@ -121,6 +163,11 @@ export function createDemoManifest(streamId: string) {
 
 export function getManifest(streamId: string) {
   const key = streamId || 'monad-keynote-hd';
+  // Only create manifests for allowed streams
+  const allowed = getStreamIdList();
+  if (!allowed.includes(key)) {
+    throw new Error(`Stream '${key}' is not in the allowlist`);
+  }
   if (!manifestStore.has(key)) {
     manifestStore.set(key, createDemoManifest(key));
   }

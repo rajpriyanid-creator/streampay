@@ -20,11 +20,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Monorepo Dependencies
-        run: |
-          npm ci
-          npm run install:all
+      # Clean deterministic installs using lockfiles
+      - name: Install Root Dependencies
+        run: npm ci
 
+      - name: Install Access Service Dependencies
+        run: npm ci --prefix access-service
+
+      - name: Install Frontend Dependencies
+        run: npm ci --prefix frontend
+
+      # TypeScript checks
       - name: TypeScript Check Access Service
         run: |
           cd access-service
@@ -35,13 +41,46 @@ jobs:
           cd frontend
           npx tsc --noEmit
 
+      # Production builds
+      - name: Build Access Service
+        run: npm run build --prefix access-service
+
+      - name: Build Frontend (Production)
+        run: npm run build --prefix frontend
+
+      # Foundry setup with pinned dependencies
       - name: Setup Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
 
-      - name: Build & Test Smart Contracts
+      - name: Install Foundry Dependencies
+        run: |
+          cd contracts
+          forge install foundry-rs/forge-std --no-commit 2>/dev/null || true
+          forge install OpenZeppelin/openzeppelin-contracts --no-commit 2>/dev/null || true
+
+      - name: Build Smart Contracts
         run: |
           cd contracts
           forge build
+
+      - name: Test Smart Contracts
+        run: |
+          cd contracts
           forge test -vvv
+
+      # Manifest generation test
+      - name: Generate Test Manifest
+        run: node scripts/generate_manifest.js
+
+      # Upload test artifacts
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            contracts/out/
+            manifests/demo_stream.json
+          retention-days: 7

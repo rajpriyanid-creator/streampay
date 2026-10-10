@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test, console} from "forge-std/Test.sol";
 import {StreamPaySettlement} from "../src/StreamPaySettlement.sol";
 import {MockUSDC} from "../src/mocks/MockUSDC.sol";
+import {MockBadToken} from "../src/mocks/MockBadToken.sol";
 
 /**
  * @title StreamPaySettlementTest
@@ -830,5 +831,122 @@ contract StreamPaySettlementTest is Test {
             assertTrue(s.settledUnits <= uint64(maxAllowed));
             assertTrue(s.settledAmount <= INITIAL_DEPOSIT);
         } catch {}
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Push-With-Pull Fallback (MockBadToken) Tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    function test_pushWithPullFallback_mockBadToken_cooperativeClose() public {
+        MockBadToken badToken = new MockBadToken();
+        StreamPaySettlement badSettlement = new StreamPaySettlement(address(badToken), owner);
+
+        badToken.mint(payer, 100_000_000);
+        vm.prank(payer);
+        badToken.approve(address(badSettlement), type(uint256).max);
+
+        StreamPaySettlement.ContentOffer memory offer = StreamPaySettlement.ContentOffer({
+            recipient: creator,
+            token: address(badToken),
+            contentIdHash: CONTENT_HASH,
+            pricingPolicyHash: POLICY_HASH,
+            unitPrice: UNIT_PRICE,
+            maxBillableUnits: MAX_BILLABLE,
+            manifestRoot: MANIFEST_ROOT,
+            maxCreditSegments: MAX_CREDIT_SEGMENTS,
+            maxCreditWindowUnits: MAX_CREDIT_WINDOW,
+            maxUnredeemedAmount: UNIT_PRICE * MAX_CREDIT_WINDOW * 5,
+            offerNonce: 1,
+            issuedAt: uint64(block.timestamp),
+            expiresAt: uint64(block.timestamp + 2 hours)
+        });
+
+        bytes32 offerDigest = badSettlement.hashContentOffer(offer);
+        (uint8 v0, bytes32 r0, bytes32 s0) = vm.sign(CREATOR_KEY, offerDigest);
+        bytes memory offerSig = abi.encodePacked(r0, s0, v0);
+
+        StreamPaySettlement.SessionConfig memory config = StreamPaySettlement.SessionConfig({
+            payer: payer,
+            sessionSigner: sessionSigner,
+            offerDigest: offerDigest,
+            initialDeposit: INITIAL_DEPOSIT,
+            maxLeadUnits: MAX_LEAD,
+            validUntil: uint64(block.timestamp + 1 hours),
+            redemptionGraceSeconds: uint64(1 hours),
+            nonce: 0
+        });
+
+        bytes32 configDigest = badSettlement.hashSessionConfig(config);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(PAYER_KEY, configDigest);
+        bytes memory configSig = abi.encodePacked(r1, s1, v1);
+
+        bytes32 sessionId = keccak256(abi.encode(configDigest, offerDigest));
+        badSettlement.openWithSignature(offer, offerSig, config, configSig);
+
+        // Advance time and create vouchers
+        vm.warp(block.timestamp + 60);
+
+        StreamPaySettlement.Voucher memory vFinal = StreamPaySettlement.Voucher({
+            sessionId: sessionId,
+            cumulativeUnits: 60
+        });
+        bytes32 vDigest = badSettlement.hashVoucher(vFinal);
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(SESSION_SIGNER_KEY, vDigest);
+        bytes memory vFinalSig = abi.encodePacked(r2, s2, v2);
+
+        StreamPaySettlement.CloseAck memory ack = StreamPaySettlement.CloseAck({
+            sessionId: sessionId,
+            finalCumulativeUnits: 60
+        });
+        bytes32 ackDigest = badSettlement.hashCloseAck(ack);
+        (uint8 v3, bytes32 r3, bytes32 s3) = vm.sign(CREATOR_KEY, ackDigest);
+        bytes memory ackSig = abi.encodePacked(r3, s3, v3);
+
+        uint256 expectedSettled = 60 * UNIT_PRICE;
+        uint256 expectedRefund = INITIAL_DEPOSIT - expectedSettled;
+
+        // Force token transfers to return false
+        badToken.setShouldFail(true);
+
+        // Closing cooperatively must NOT revert, but should fall back to claimable balances
+        badSettlement.closeCooperative(sessionId, vFinal, vFinalSig, ack, ackSig);
+
+        // Session status is CLOSED
+        StreamPaySettlement.StreamSession memory s = badSettlement.getSession(sessionId);
+        assertEq(uint8(s.status), uint8(StreamPaySettlement.SessionStatus.CLOSED));
+        assertEq(s.settledUnits, 60);
+        assertEq(s.settledAmount, expectedSettled);
+
+        // Both creator payout and payer refund failed to push, so they are stored in claimable
+        assertEq(badSettlement.claimable(address(badToken), creator), expectedSettled);
+        assertEq(badSettlement.claimable(address(badToken), payer), expectedRefund);
+
+        // If creator tries to claim while token is still failing, it reverts with TransferFailed
+        vm.prank(creator);
+        vm.expectRevert(StreamPaySettlement.TransferFailed.selector);
+        badSettlement.claim(address(badToken));
+
+        // Random address with nothing to claim reverts with NothingToClaim
+        vm.prank(attacker);
+        vm.expectRevert(StreamPaySettlement.NothingToClaim.selector);
+        badSettlement.claim(address(badToken));
+
+        // Now restore token transfer functionality
+        badToken.setShouldFail(false);
+
+        // Creator claims successfully
+        vm.prank(creator);
+        badSettlement.claim(address(badToken));
+        assertEq(badSettlement.claimable(address(badToken), creator), 0);
+        assertEq(badToken.balanceOf(creator), expectedSettled);
+
+        // Payer claims refund successfully
+        vm.prank(payer);
+        badSettlement.claim(address(badToken));
+        assertEq(badSettlement.claimable(address(badToken), payer), 0);
+        assertEq(badToken.balanceOf(payer), 100_000_000 - expectedSettled);
+
+        // Contract balance is now completely drained of the deposit
+        assertEq(badToken.balanceOf(address(badSettlement)), 0);
     }
 }

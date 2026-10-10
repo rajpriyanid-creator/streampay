@@ -30,7 +30,11 @@ export function mintAccessToken(sessionId: Hex, streamId: string, segmentIndex: 
 
 const consumed = new Map<string, number>();
 
-export function verifyToken(token: string, consume = false): TokenPayload | null {
+/**
+ * Verify a token's HMAC and expiry without consuming it.
+ * Returns the payload if valid, null otherwise.
+ */
+export function verifyToken(token: string): TokenPayload | null {
   const [body, sig] = String(token || '').split('.');
   if (!body || !sig) return null;
   const expected = crypto.createHmac('sha256', SECRET).update(body).digest();
@@ -42,29 +46,60 @@ export function verifyToken(token: string, consume = false): TokenPayload | null
     const nowS = Math.floor(Date.now() / 1000);
     if (typeof p.exp !== 'number' || p.exp < nowS) return null;
     if (consumed.has(sig)) return null;
-    if (consume) {
-      for (const [k, e] of consumed) if (e < nowS) consumed.delete(k);
-      consumed.set(sig, p.exp);
-    }
     return p;
   } catch { return null; }
 }
 
+/**
+ * Mark a token as consumed (single-use enforcement).
+ */
+function markConsumed(token: string): void {
+  const [, sig] = String(token || '').split('.');
+  if (!sig) return;
+  const nowS = Math.floor(Date.now() / 1000);
+  // Garbage collect expired entries
+  for (const [k, e] of consumed) if (e < nowS) consumed.delete(k);
+  // Parse payload for expiry
+  const payload = verifyToken(token);
+  consumed.set(sig, payload?.exp ?? nowS + 60);
+}
+
+/**
+ * Consume an access token ONLY after all validations pass.
+ * This ensures a token submitted against the wrong path is NOT burned.
+ *
+ * Validation order:
+ * 1. Verify HMAC + expiry + single-use
+ * 2. Validate stream ID matches token
+ * 3. Validate segment index matches token
+ * 4. Only THEN mark as consumed
+ */
 export function consumeAccessToken(
   token: string,
   expectedStreamId: string,
   expectedSegmentIndex: number
 ): { valid: boolean; reason?: string; record?: TokenPayload } {
-  const payload = verifyToken(token, true);
+  // Step 1: Verify token (HMAC, expiry, not already consumed)
+  const payload = verifyToken(token);
   if (!payload) {
     return { valid: false, reason: 'Invalid, expired, or already consumed access token' };
   }
+
+  // Step 2: Validate stream binding BEFORE consuming
   if (payload.stream !== expectedStreamId) {
+    // DO NOT consume the token — it may be valid for the correct stream
     return { valid: false, reason: `Stream ID mismatch: token authorized for ${payload.stream}, got ${expectedStreamId}` };
   }
+
+  // Step 3: Validate segment index binding BEFORE consuming
   if (payload.idx !== expectedSegmentIndex) {
+    // DO NOT consume the token — it may be valid for the correct segment
     return { valid: false, reason: `Segment index mismatch: token authorized for ${payload.idx}, got ${expectedSegmentIndex}` };
   }
+
+  // Step 4: All checks passed — NOW consume the token
+  markConsumed(token);
+
   return {
     valid: true,
     record: payload,

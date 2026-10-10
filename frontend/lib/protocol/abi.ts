@@ -118,7 +118,6 @@ export const STREAMPAY_SETTLEMENT_ABI = [
     name: 'claim',
     inputs: [
       { name: 'token', type: 'address' },
-      { name: 'account', type: 'address' },
     ],
     outputs: [],
     stateMutability: 'nonpayable',

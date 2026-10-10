@@ -1,6 +1,9 @@
 /**
  * StreamPay v2.5 Envio Event Handlers
- * Maps all 8 StreamPaySettlement contract events to indexer entities.
+ * Maps all 8+ StreamPaySettlement contract events to indexer entities.
+ *
+ * Checkpoint IDs are deterministic from tx hash + log index to avoid
+ * double-counting on reprocessing/reorgs.
  */
 
 export const handleStreamOpened = async ({ event, context }: any) => {
@@ -54,8 +57,9 @@ export const handleStreamCheckpointed = async ({ event, context }: any) => {
     });
   }
 
+  // Deterministic checkpoint ID from tx hash + log index to be idempotent on reprocessing
   context.Checkpoint.set({
-    id: `${sessionId}-${event.transaction.hash}-${event.logIndex}`,
+    id: `${event.transaction.hash}-${event.logIndex}`,
     session_id: sessionId,
     cumulativeUnits: event.params.cumulativeUnits,
     cumulativeAmount: event.params.cumulativeAmount,
@@ -109,6 +113,8 @@ export const handlePayoutCredited = async ({ event, context }: any) => {
 
 export const handleClaimed = async ({ event, context }: any) => {
   const key = `${event.params.token}-${event.params.account}`;
+
+  // Reset claimable balance to zero after successful claim
   context.ClaimableCredit.set({
     id: key,
     token: event.params.token,
@@ -117,8 +123,9 @@ export const handleClaimed = async ({ event, context }: any) => {
     lastUpdated: BigInt(event.block.timestamp),
   });
 
+  // Record the claim event with deterministic ID
   context.Claim.set({
-    id: `${event.params.token}-${event.params.account}-${event.transaction.hash}-${event.logIndex}`,
+    id: `${event.transaction.hash}-${event.logIndex}`,
     token: event.params.token,
     account: event.params.account,
     amount: event.params.amount,
@@ -128,9 +135,23 @@ export const handleClaimed = async ({ event, context }: any) => {
 };
 
 export const handlePaused = async ({ event, context }: any) => {
-  // Handled for admin audit logs
+  // Persist admin event for audit trail
+  context.AdminEvent.set({
+    id: `paused-${event.transaction.hash}-${event.logIndex}`,
+    eventType: 'PAUSED',
+    account: event.params.account,
+    blockNumber: BigInt(event.block.number),
+    blockTimestamp: BigInt(event.block.timestamp),
+  });
 };
 
 export const handleUnpaused = async ({ event, context }: any) => {
-  // Handled for admin audit logs
+  // Persist admin event for audit trail
+  context.AdminEvent.set({
+    id: `unpaused-${event.transaction.hash}-${event.logIndex}`,
+    eventType: 'UNPAUSED',
+    account: event.params.account,
+    blockNumber: BigInt(event.block.number),
+    blockTimestamp: BigInt(event.block.timestamp),
+  });
 };

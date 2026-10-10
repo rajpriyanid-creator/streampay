@@ -1,7 +1,14 @@
+# StreamPay v2.5 Envio HyperIndex Configuration
+#
+# IMPORTANT: This config is for LOCAL DEVELOPMENT ONLY (chain 31337).
+# For Monad Testnet (10143), use config.testnet.yaml AFTER actual deployment.
+#
+# The contract address 0x5FbDB...aa3 is the standard Anvil local deployment address.
+# It MUST NOT be used on testnet — configure a real deployed address there.
 name: streampay-indexer
-description: StreamPay v2.5 Envio HyperIndex event indexer for Monad testnet & local network
+description: StreamPay v2.5 Envio HyperIndex event indexer for local Anvil network
 networks:
-  - id: 10143
+  - id: 31337
     start_block: 0
     contracts:
       - name: StreamPaySettlement

@@ -1,12 +1,21 @@
 /**
  * StreamPay v2.5 — Checkpointing, Close Watcher & Redemption Sweeper Worker
  *
- * Automated service that:
- * 1. Queries latest active vouchers from access-service (/api/vouchers).
+ * Continuous automated service that:
+ * 1. Queries latest active vouchers from access-service (/api/vouchers) with admin auth.
  * 2. Monitors on-chain session state via StreamPaySettlement contract.
  * 3. Auto-checkpoints pending vouchers if un-settled.
  * 4. Defends against unilateral close requests by submitting latest voucher before challengeEndsAt.
  * 5. Finalizes expired or challenge-completed sessions.
+ *
+ * Configuration:
+ *   RPC_URL           - Chain RPC endpoint (required for non-local)
+ *   SETTLEMENT_ADDRESS - Contract address (required for non-local)
+ *   RELAYER_KEY        - Private key for submitting transactions (required for non-local)
+ *   ACCESS_SERVICE_URL - Access service base URL
+ *   ADMIN_TOKEN        - Admin token for accessing voucher endpoints
+ *   SWEEP_INTERVAL_MS  - Milliseconds between sweep cycles (default: 30000)
+ *   NETWORK            - 'local' or 'testnet'
  *
  * Usage: npx tsx scripts/sweeper.ts
  */
@@ -20,10 +29,45 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
+// ─── Configuration ────────────────────────────────────────────────
+
+const NETWORK = process.env.NETWORK || 'local';
 const RPC_URL = process.env.RPC_URL || 'http://127.0.0.1:8545';
 const ACCESS_SERVICE_URL = process.env.ACCESS_SERVICE_URL || 'http://localhost:4001';
-const SETTLEMENT_ADDRESS = (process.env.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3') as Address;
-const RELAYER_KEY = (process.env.RELAYER_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80') as Hex; // Anvil account #0
+const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS || 30000);
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+
+// Known Anvil dev key — only allowed on local chain
+const KNOWN_ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+
+function getRelayerKey(): Hex {
+  const key = process.env.RELAYER_KEY || KNOWN_ANVIL_KEY;
+
+  // SECURITY: Refuse to use known dev key on non-local networks
+  if (NETWORK !== 'local' && key === KNOWN_ANVIL_KEY) {
+    console.error('⛔ FATAL: Cannot use known Anvil dev key on non-local network.');
+    console.error('   Set RELAYER_KEY to a dedicated relayer private key.');
+    process.exit(1);
+  }
+
+  return key as Hex;
+}
+
+function getSettlementAddress(): Address {
+  const addr = process.env.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+
+  // Warn if using default local address on non-local network
+  if (NETWORK !== 'local' && addr === '0x5FbDB2315678afecb367f032d93F642f64180aa3') {
+    console.error('⛔ FATAL: Cannot use default Anvil contract address on non-local network.');
+    console.error('   Set SETTLEMENT_ADDRESS to the deployed contract address.');
+    process.exit(1);
+  }
+
+  return addr as Address;
+}
+
+const RELAYER_KEY = getRelayerKey();
+const SETTLEMENT_ADDRESS = getSettlementAddress();
 
 const publicClient = createPublicClient({ transport: http(RPC_URL) });
 const account = privateKeyToAccount(RELAYER_KEY);
@@ -77,6 +121,36 @@ export interface SweeperStats {
   errorsEncountered: number;
 }
 
+// Track processed sessions to avoid duplicate submissions
+const processedCheckpoints = new Set<string>();
+const processedFinalizations = new Set<string>();
+
+/**
+ * Verify chain ID and contract code before any transactions.
+ */
+async function verifyChainAndContract(): Promise<boolean> {
+  try {
+    const chainId = await publicClient.getChainId();
+    const expectedChainId = NETWORK === 'local' ? 31337 : 10143;
+    if (chainId !== expectedChainId) {
+      console.error(`⛔ Chain ID mismatch: expected ${expectedChainId}, got ${chainId}`);
+      return false;
+    }
+
+    const code = await publicClient.getCode({ address: SETTLEMENT_ADDRESS });
+    if (!code || code === '0x') {
+      console.error(`⛔ No contract code at ${SETTLEMENT_ADDRESS} on chain ${chainId}`);
+      return false;
+    }
+
+    console.log(`✅ Verified contract at ${SETTLEMENT_ADDRESS} on chain ${chainId}`);
+    return true;
+  } catch (err: any) {
+    console.error(`⛔ Chain verification failed: ${err.message}`);
+    return false;
+  }
+}
+
 export async function runSweeperCycle(): Promise<SweeperStats> {
   const stats: SweeperStats = {
     checkedSessions: 0,
@@ -86,7 +160,12 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
   };
 
   try {
-    const res = await fetch(`${ACCESS_SERVICE_URL}/api/vouchers`);
+    const headers: Record<string, string> = {};
+    if (ADMIN_TOKEN) {
+      headers['Authorization'] = `Bearer ${ADMIN_TOKEN}`;
+    }
+
+    const res = await fetch(`${ACCESS_SERVICE_URL}/api/vouchers`, { headers });
     if (!res.ok) {
       console.log(`[Sweeper] Access service returned status ${res.status}`);
       return stats;
@@ -102,7 +181,14 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
     for (const item of vouchers) {
       try {
         const sessionId = item.sessionId as Hex;
-        const latestVoucherRes = await fetch(`${ACCESS_SERVICE_URL}/api/session/latest-voucher/${sessionId}`);
+
+        const voucherHeaders: Record<string, string> = {};
+        if (ADMIN_TOKEN) voucherHeaders['Authorization'] = `Bearer ${ADMIN_TOKEN}`;
+
+        const latestVoucherRes = await fetch(
+          `${ACCESS_SERVICE_URL}/api/session/latest-voucher/${sessionId}`,
+          { headers: voucherHeaders }
+        );
         if (!latestVoucherRes.ok) continue;
 
         const sessionData = await latestVoucherRes.json();
@@ -110,7 +196,7 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
 
         if (!lastVoucher || !lastVoucher.signature) continue;
 
-        // Read session state directly from contract
+        // Read fresh on-chain state before any action
         const onChainSession = (await publicClient.readContract({
           address: SETTLEMENT_ADDRESS,
           abi: settlementAbi,
@@ -125,64 +211,101 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
         const redemptionDeadline = BigInt(onChainSession.redemptionDeadline);
         const now = BigInt(Math.floor(Date.now() / 1000));
 
+        const cpKey = `${sessionId}-${voucherUnits}`;
+
         // 1. OPEN session with un-checkpointed higher voucher -> Checkpoint
         if (status === SESSION_STATUS.OPEN && voucherUnits > settledUnits && now < redemptionDeadline) {
-          console.log(`[Sweeper] Checkpointing session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
-          const txHash = await walletClient.writeContract({
-            address: SETTLEMENT_ADDRESS,
-            abi: settlementAbi,
-            functionName: 'checkpoint',
-            args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
-            chain: null,
-          });
-          await publicClient.waitForTransactionReceipt({ hash: txHash });
-          stats.checkpointsSubmitted++;
-          console.log(`[Sweeper] ✅ Checkpoint tx confirmed: ${txHash.slice(0, 12)}...`);
+          if (!processedCheckpoints.has(cpKey)) {
+            console.log(`[Sweeper] Checkpointing session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
+            try {
+              const txHash = await walletClient.writeContract({
+                address: SETTLEMENT_ADDRESS,
+                abi: settlementAbi,
+                functionName: 'checkpoint',
+                args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
+                chain: null,
+              });
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              processedCheckpoints.add(cpKey);
+              stats.checkpointsSubmitted++;
+              console.log(`[Sweeper] ✅ Checkpoint tx confirmed: ${txHash.slice(0, 12)}...`);
+            } catch (txErr: any) {
+              // Idempotent: if the checkpoint already happened, just log and continue
+              console.warn(`[Sweeper] Checkpoint tx failed (may be already processed): ${txErr.message}`);
+              processedCheckpoints.add(cpKey);
+            }
+          }
         }
 
-        // 2. CLOSE_REQUESTED session with un-checkpointed voucher -> Submit counter-voucher before challengeEndsAt
+        // 2. CLOSE_REQUESTED with un-checkpointed voucher -> Defend challenge BEFORE challengeEndsAt
         if (status === SESSION_STATUS.CLOSE_REQUESTED && voucherUnits > settledUnits && now < challengeEndsAt) {
-          console.log(`[Sweeper] Defending challenge for session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
-          const txHash = await walletClient.writeContract({
-            address: SETTLEMENT_ADDRESS,
-            abi: settlementAbi,
-            functionName: 'checkpoint',
-            args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
-            chain: null,
-          });
-          await publicClient.waitForTransactionReceipt({ hash: txHash });
-          stats.checkpointsSubmitted++;
-          console.log(`[Sweeper] ✅ Challenge defense tx confirmed: ${txHash.slice(0, 12)}...`);
+          if (!processedCheckpoints.has(cpKey)) {
+            console.log(`[Sweeper] Defending challenge for session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
+            try {
+              const txHash = await walletClient.writeContract({
+                address: SETTLEMENT_ADDRESS,
+                abi: settlementAbi,
+                functionName: 'checkpoint',
+                args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
+                chain: null,
+              });
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              processedCheckpoints.add(cpKey);
+              stats.checkpointsSubmitted++;
+              console.log(`[Sweeper] ✅ Challenge defense tx confirmed: ${txHash.slice(0, 12)}...`);
+            } catch (txErr: any) {
+              console.warn(`[Sweeper] Challenge defense failed: ${txErr.message}`);
+              processedCheckpoints.add(cpKey);
+            }
+          }
         }
 
-        // 3. CLOSE_REQUESTED session past challengeEndsAt -> Finalize After Challenge
+        // 3. CLOSE_REQUESTED past challengeEndsAt -> Finalize After Challenge
         if (status === SESSION_STATUS.CLOSE_REQUESTED && now >= challengeEndsAt) {
-          console.log(`[Sweeper] Finalizing challenge for session ${sessionId.slice(0, 10)}...`);
-          const txHash = await walletClient.writeContract({
-            address: SETTLEMENT_ADDRESS,
-            abi: settlementAbi,
-            functionName: 'finalizeAfterChallenge',
-            args: [sessionId],
-            chain: null,
-          });
-          await publicClient.waitForTransactionReceipt({ hash: txHash });
-          stats.finalizationsExecuted++;
-          console.log(`[Sweeper] ✅ Finalize challenge tx confirmed: ${txHash.slice(0, 12)}...`);
+          const fKey = `finalize-${sessionId}`;
+          if (!processedFinalizations.has(fKey)) {
+            console.log(`[Sweeper] Finalizing challenge for session ${sessionId.slice(0, 10)}...`);
+            try {
+              const txHash = await walletClient.writeContract({
+                address: SETTLEMENT_ADDRESS,
+                abi: settlementAbi,
+                functionName: 'finalizeAfterChallenge',
+                args: [sessionId],
+                chain: null,
+              });
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              processedFinalizations.add(fKey);
+              stats.finalizationsExecuted++;
+              console.log(`[Sweeper] ✅ Finalize challenge tx confirmed: ${txHash.slice(0, 12)}...`);
+            } catch (txErr: any) {
+              console.warn(`[Sweeper] Finalize challenge failed: ${txErr.message}`);
+              processedFinalizations.add(fKey);
+            }
+          }
         }
 
         // 4. OPEN session past redemptionDeadline -> Finalize Expired
         if (status === SESSION_STATUS.OPEN && now >= redemptionDeadline) {
-          console.log(`[Sweeper] Finalizing expired session ${sessionId.slice(0, 10)}...`);
-          const txHash = await walletClient.writeContract({
-            address: SETTLEMENT_ADDRESS,
-            abi: settlementAbi,
-            functionName: 'finalizeExpired',
-            args: [sessionId],
-            chain: null,
-          });
-          await publicClient.waitForTransactionReceipt({ hash: txHash });
-          stats.finalizationsExecuted++;
-          console.log(`[Sweeper] ✅ Finalize expired tx confirmed: ${txHash.slice(0, 12)}...`);
+          const fKey = `expire-${sessionId}`;
+          if (!processedFinalizations.has(fKey)) {
+            console.log(`[Sweeper] Finalizing expired session ${sessionId.slice(0, 10)}...`);
+            try {
+              const txHash = await walletClient.writeContract({
+                address: SETTLEMENT_ADDRESS,
+                abi: settlementAbi,
+                functionName: 'finalizeExpired',
+                args: [sessionId],
+                chain: null,
+              });
+              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              processedFinalizations.add(fKey);
+              stats.finalizationsExecuted++;
+              console.log(`[Sweeper] ✅ Finalize expired tx confirmed: ${txHash.slice(0, 12)}...`);
+            } catch (txErr: any) {
+              console.warn(`[Sweeper] Finalize expired failed: ${txErr.message}`);
+              processedFinalizations.add(fKey);
+            }
+          }
         }
       } catch (err: any) {
         stats.errorsEncountered++;
@@ -197,10 +320,46 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
   return stats;
 }
 
-// Execute single cycle if run directly via CLI
+// ─── Continuous Loop with Graceful Shutdown ─────────────────────
+
+let running = true;
+
+async function sweepLoop() {
+  console.log(`🔄 StreamPay Sweeper Worker starting continuous operation...`);
+  console.log(`   Network: ${NETWORK}`);
+  console.log(`   RPC: ${RPC_URL}`);
+  console.log(`   Settlement: ${SETTLEMENT_ADDRESS}`);
+  console.log(`   Relayer: ${account.address}`);
+  console.log(`   Interval: ${SWEEP_INTERVAL_MS}ms`);
+
+  // Verify chain and contract before starting
+  const verified = await verifyChainAndContract();
+  if (!verified) {
+    console.error('⛔ Pre-flight verification failed. Exiting.');
+    process.exit(1);
+  }
+
+  while (running) {
+    try {
+      const stats = await runSweeperCycle();
+      const ts = new Date().toISOString();
+      console.log(`[${ts}] Sweep complete: checked=${stats.checkedSessions} checkpoints=${stats.checkpointsSubmitted} finalizations=${stats.finalizationsExecuted} errors=${stats.errorsEncountered}`);
+    } catch (err: any) {
+      console.error(`[Sweeper] Unhandled cycle error: ${err.message}`);
+    }
+
+    // Wait with exponential backoff on errors, normal interval otherwise
+    await new Promise((resolve) => setTimeout(resolve, SWEEP_INTERVAL_MS));
+  }
+
+  console.log('🛑 Sweeper shutting down gracefully.');
+}
+
+// Graceful shutdown handlers
+process.on('SIGINT', () => { running = false; console.log('\nReceived SIGINT, shutting down...'); });
+process.on('SIGTERM', () => { running = false; console.log('\nReceived SIGTERM, shutting down...'); });
+
+// Execute if run directly via CLI
 if (require.main === module || (typeof process !== 'undefined' && process.argv[1]?.endsWith('sweeper.ts'))) {
-  console.log('🔄 StreamPay Sweeper Worker starting single sweep cycle...');
-  runSweeperCycle().then((stats) => {
-    console.log('✅ Sweeper cycle finished:', stats);
-  });
+  sweepLoop();
 }
