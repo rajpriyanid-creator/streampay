@@ -389,25 +389,38 @@ contract StreamPaySettlementTest is Test {
             sessionId: sessionId,
             cumulativeUnits: 15
         });
-        settlement.checkpoint(sessionId, v1, _signVoucher(v1, SESSION_SIGNER_KEY));
+        bytes memory v1Sig = _signVoucher(v1, SESSION_SIGNER_KEY);
+        settlement.checkpoint(sessionId, v1, v1Sig);
 
         // Try lower units
         StreamPaySettlement.Voucher memory v2 = StreamPaySettlement.Voucher({
             sessionId: sessionId,
             cumulativeUnits: 10
         });
+        bytes memory v2Sig = _signVoucher(v2, SESSION_SIGNER_KEY);
         vm.expectRevert(StreamPaySettlement.VoucherNotAdvancing.selector);
-        settlement.checkpoint(sessionId, v2, _signVoucher(v2, SESSION_SIGNER_KEY));
+        settlement.checkpoint(sessionId, v2, v2Sig);
     }
 
     function test_checkpoint_revert_exceedsDeposit() public {
-        bytes32 sessionId = _openSession();
+        StreamPaySettlement.ContentOffer memory offer = _defaultOffer();
+        bytes memory offerSig = _signOffer(offer, CREATOR_KEY);
+        bytes32 offerDigest = settlement.hashContentOffer(offer);
+
+        uint256 smallDeposit = 100_000; // 200 units (maxBillable is 3600)
+        StreamPaySettlement.SessionConfig memory config = _defaultConfig(offerDigest);
+        config.initialDeposit = smallDeposit;
+        bytes memory configSig = _signConfig(config, PAYER_KEY);
+        bytes32 configDigest = settlement.hashSessionConfig(config);
+
+        bytes32 sessionId = keccak256(abi.encode(configDigest, offerDigest));
+        settlement.openWithSignature(offer, offerSig, config, configSig);
 
         // Warp far enough that elapsed allows it
-        vm.warp(block.timestamp + MAX_BILLABLE + MAX_LEAD);
+        vm.warp(block.timestamp + 300);
 
-        // Try to settle more than deposit allows
-        uint64 maxAffordableUnits = uint64(INITIAL_DEPOSIT / UNIT_PRICE);
+        // Try to settle more than deposit allows (201 units = 100_500 > 100_000, but <= 3600 maxBillable)
+        uint64 maxAffordableUnits = uint64(smallDeposit / UNIT_PRICE);
         StreamPaySettlement.Voucher memory v = StreamPaySettlement.Voucher({
             sessionId: sessionId,
             cumulativeUnits: maxAffordableUnits + 1
@@ -415,6 +428,20 @@ contract StreamPaySettlementTest is Test {
         bytes memory vSig = _signVoucher(v, SESSION_SIGNER_KEY);
 
         vm.expectRevert(StreamPaySettlement.ExceedsDepositCap.selector);
+        settlement.checkpoint(sessionId, v, vSig);
+    }
+
+    function test_checkpoint_revert_exceedsMaxBillable() public {
+        bytes32 sessionId = _openSession();
+        vm.warp(block.timestamp + MAX_BILLABLE + MAX_LEAD);
+
+        StreamPaySettlement.Voucher memory v = StreamPaySettlement.Voucher({
+            sessionId: sessionId,
+            cumulativeUnits: MAX_BILLABLE + 1
+        });
+        bytes memory vSig = _signVoucher(v, SESSION_SIGNER_KEY);
+
+        vm.expectRevert(StreamPaySettlement.ExceedsMaxBillableUnits.selector);
         settlement.checkpoint(sessionId, v, vSig);
     }
 
@@ -444,8 +471,9 @@ contract StreamPaySettlementTest is Test {
             sessionId: sessionId,
             cumulativeUnits: 5
         });
+        bytes memory v2Sig = _signVoucher(v2, SESSION_SIGNER_KEY);
         vm.expectRevert(StreamPaySettlement.SessionNotOpen.selector);
-        settlement.checkpoint(sessionId, v2, _signVoucher(v2, SESSION_SIGNER_KEY));
+        settlement.checkpoint(sessionId, v2, v2Sig);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -599,8 +627,9 @@ contract StreamPaySettlementTest is Test {
             cumulativeUnits: 30
         });
 
+        bytes memory vSig = _signVoucher(v, SESSION_SIGNER_KEY);
         vm.expectRevert(StreamPaySettlement.ChallengeNotEnded.selector);
-        settlement.checkpoint(sessionId, v, _signVoucher(v, SESSION_SIGNER_KEY));
+        settlement.checkpoint(sessionId, v, vSig);
     }
 
     function test_finalizeAfterChallenge_success() public {
