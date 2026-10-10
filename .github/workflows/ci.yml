@@ -113,18 +113,43 @@ jobs:
           echo "Settlement: $SETTLEMENT, Token: $TOKEN"
 
           echo "Executing on-chain complete lifecycle test (open -> checkpoint -> continued playback -> close/refund)..."
-          SETTLEMENT_ADDRESS=$SETTLEMENT TOKEN_ADDRESS=$TOKEN npx tsx scripts/e2e/lifecycle-test.ts
+          SETTLEMENT_ADDRESS=$SETTLEMENT TOKEN_ADDRESS=$TOKEN npx tsx scripts/e2e/lifecycle-test.ts > /tmp/lifecycle.log 2>&1 || {
+            ERR=$(tail -n 20 /tmp/lifecycle.log | tr '\n' ' ')
+            echo "::error::lifecycle-test.ts failed: $ERR"
+            cat /tmp/lifecycle.log
+            kill $ANVIL_PID || true
+            exit 1
+          }
+          cat /tmp/lifecycle.log
 
           echo "Starting Access Service connected to local chain..."
-          PORT=4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT NETWORK=local node access-service/dist/server.js &
+          PORT=4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT NETWORK=local node access-service/dist/server.js > /tmp/svc.log 2>&1 &
           SVC_PID=$!
           sleep 3
 
           echo "Running HTTP E2E Test Suite..."
-          ACCESS_URL=http://localhost:4001 node scripts/e2e/e2e.mjs
+          ACCESS_URL=http://localhost:4001 node scripts/e2e/e2e.mjs > /tmp/e2e.log 2>&1 || {
+            ERR=$(tail -n 20 /tmp/e2e.log | tr '\n' ' ')
+            echo "::error::e2e.mjs failed: $ERR"
+            cat /tmp/e2e.log
+            cat /tmp/svc.log
+            kill $SVC_PID || true
+            kill $ANVIL_PID || true
+            exit 1
+          }
+          cat /tmp/e2e.log
 
           echo "Running Access Service End-to-End Integration Suite (media hashes, proofs, gating, checkpoints)..."
-          ACCESS_URL=http://localhost:4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT TOKEN_ADDRESS=$TOKEN npx tsx scripts/e2e/access-service-integration.ts
+          ACCESS_URL=http://localhost:4001 RPC_URL=http://127.0.0.1:8545 SETTLEMENT_ADDRESS=$SETTLEMENT TOKEN_ADDRESS=$TOKEN npx tsx scripts/e2e/access-service-integration.ts > /tmp/integ.log 2>&1 || {
+            ERR=$(tail -n 20 /tmp/integ.log | tr '\n' ' ')
+            echo "::error::access-service-integration.ts failed: $ERR"
+            cat /tmp/integ.log
+            cat /tmp/svc.log
+            kill $SVC_PID || true
+            kill $ANVIL_PID || true
+            exit 1
+          }
+          cat /tmp/integ.log
 
           kill $SVC_PID || true
           kill $ANVIL_PID || true
