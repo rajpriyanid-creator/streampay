@@ -24,6 +24,10 @@ export interface StreamPayLoaderConfig {
 export function createStreamPayFragmentLoader(
   config: StreamPayLoaderConfig
 ): any {
+  // Per-stream/session cache of cryptographically verified segment buffers.
+  // Prevents HLS preload/retry from re-requesting tokens or generating duplicate vouchers.
+  const verifiedSegmentCache = new Map<number, { data: ArrayBuffer; stats: any }>();
+
   return class StreamPayFragmentLoader {
     private context: any = null;
     private callbacks: any = null;
@@ -68,6 +72,23 @@ export function createStreamPayFragmentLoader(
         throw new Error(`FAIL_CLOSED: Cannot determine segment index from url: ${url}`);
       }
       const segmentIndex = parseInt(match[1], 10);
+
+      // Check verified cache to prevent double-charging or duplicate vouchers on player preload/retry
+      if (verifiedSegmentCache.has(segmentIndex)) {
+        const cached = verifiedSegmentCache.get(segmentIndex)!;
+        this.stats.loaded = cached.data.byteLength;
+        this.stats.total = cached.data.byteLength;
+        this.stats.loading.end = performance.now();
+        callbacks.onSuccess(
+          {
+            url: context.url,
+            data: cached.data,
+          },
+          this.stats,
+          context
+        );
+        return;
+      }
 
       // Determine streamId dynamically — fail-closed if missing
       const streamId = config.streamId || config.manifest?.streamId;
@@ -168,6 +189,7 @@ export function createStreamPayFragmentLoader(
       config.onSegmentVerified?.(segmentIndex, manifestEntry.durationUnits);
 
       this.stats.loading.end = performance.now();
+      verifiedSegmentCache.set(segmentIndex, { data: buffer, stats: { ...this.stats } });
 
       // 6. Deliver verified segment bytes to HLS.js pipeline
       callbacks.onSuccess(

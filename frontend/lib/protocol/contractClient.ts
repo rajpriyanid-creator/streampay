@@ -49,21 +49,56 @@ export function getPublicClient(rpcHttp: string) {
   });
 }
 
+export interface ContractVerificationResult {
+  valid: boolean;
+  paymentToken?: Address;
+  chainId?: number;
+  error?: string;
+}
+
 /**
- * Verify bytecode deployment on chain.
+ * Verifies StreamPaySettlement contract with chain ID match and settlement-specific read (paymentToken()).
+ * Proves that MockUSDC or arbitrary bytecode contracts cannot be mistaken for StreamPaySettlement.
+ */
+export async function verifySettlementContract(
+  rpcHttp: string,
+  contractAddress: Address,
+  expectedChainId?: number
+): Promise<ContractVerificationResult> {
+  try {
+    const client = getPublicClient(rpcHttp);
+    const chainId = await client.getChainId();
+    if (expectedChainId && chainId !== expectedChainId) {
+      return { valid: false, chainId, error: `Chain ID mismatch: expected ${expectedChainId}, got ${chainId}` };
+    }
+    const bytecode = await client.getBytecode({ address: contractAddress });
+    if (!bytecode || bytecode === '0x') {
+      return { valid: false, chainId, error: `No contract bytecode at ${contractAddress}` };
+    }
+    // Perform settlement-specific read: paymentToken()
+    const paymentToken = await client.readContract({
+      address: contractAddress,
+      abi: STREAMPAY_SETTLEMENT_ABI,
+      functionName: 'paymentToken',
+    }) as Address;
+    if (!paymentToken || paymentToken === '0x0000000000000000000000000000000000000000') {
+      return { valid: false, chainId, error: 'Settlement contract returned zero paymentToken address' };
+    }
+    return { valid: true, paymentToken, chainId };
+  } catch (err: any) {
+    return { valid: false, error: `Not a valid StreamPaySettlement contract: ${err.message}` };
+  }
+}
+
+/**
+ * Verify bytecode deployment on chain with settlement-specific read.
  */
 export async function verifyContractDeployed(
   rpcHttp: string,
   contractAddress: Address
 ): Promise<boolean> {
-  try {
-    const client = getPublicClient(rpcHttp);
-    const bytecode = await client.getBytecode({ address: contractAddress });
-    return !!bytecode && bytecode !== '0x';
-  } catch (err) {
-    console.warn(`Contract bytecode check failed at ${contractAddress}:`, err);
-    return false;
-  }
+  const res = await verifySettlementContract(rpcHttp, contractAddress);
+  return res.valid;
 }
 
 /**

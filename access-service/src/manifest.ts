@@ -11,6 +11,9 @@ export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
   Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
 );
 
+export const CANONICAL_PRICING_POLICY_STRING = 'fixed-rate-0.0005-usdc-per-second-unit';
+export const CANONICAL_PRICING_POLICY_HASH: Hex = '0x76422f1e290b9f7982658421843336df3a5b54190454061ecfa6748f5987c500';
+
 export function computeSegmentLeaf(params: {
   schemaVersion?: number;
   contentIdHash: Hex;
@@ -195,7 +198,7 @@ export function createCanonicalManifest(streamId: string) {
     unitPriceUSDC: '0.0005',
     unitPrice: UNIT_PRICE.toString(),
     contentIdHash,
-    pricingPolicyHash: zeroHash,
+    pricingPolicyHash: CANONICAL_PRICING_POLICY_HASH,
     renditionIdHash: zeroHash,
     manifestRoot,
     merkleRoot: manifestRoot,

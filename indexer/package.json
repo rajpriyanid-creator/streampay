@@ -5,7 +5,7 @@
   "scripts": {
     "codegen": "envio codegen",
     "dev": "envio dev",
-    "build": "envio build",
+    "build": "envio codegen",
     "start": "envio start"
   },
   "dependencies": {

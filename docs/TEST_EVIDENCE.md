@@ -37,32 +37,35 @@ Evidence: Next.js 14.2 production bundle successfully compiled, linted, and stat
 
 ### Reservation Ledger Unit & Concurrency Suite (`node --test`)
 ```
-Status: PASS (10/10 tests pass, exit code 0)
+Status: PASS (12/12 tests pass, exit code 0)
 Location: access-service/dist/reservationStore.test.js
 Command: node --test access-service/dist/reservationStore.test.js
-Execution Time: 104 ms
+Execution Time: 112 ms
 
 Subtest Results:
-  ok 1 - 1. Monotonicity: rejects cumulative units below settled units
-  ok 2 - 2. Idempotency: duplicate requests return existing active token without double-counting slots
-  ok 3 - 3. In-flight Cap: maxCreditSegments boundary blocks excess reservations
-  ok 4 - 4. Failed HTTP Delivery: immediately releases in-flight reservation slot
-  ok 5 - 5. Never-consumed / Expired tokens: pruned automatically after TTL
-  ok 6 - 6. Credit Window boundary: maxCreditWindowUnits blocks unredeemed units above checkpoint
-  ok 7 - 7. Checkpoint & Resume: updating settledUnits frees credit window for continued playback
-  ok 8 - 8. Cap Boundaries: maxUnredeemedAmount, maxBillableUnits, and deposit caps
-  ok 9 - 9. Concurrency Safety: parallel asynchronous requests are serialized correctly
-1..1 (tests: 10, pass: 10, fail: 0)
+  ✔ 1. Monotonicity: rejects cumulative units below settled units
+  ✔ 2. Idempotency: duplicate requests return existing active token without double-counting slots
+  ✔ 3. In-flight Cap: maxCreditSegments boundary blocks excess reservations
+  ✔ 4. Failed HTTP Delivery: immediately releases in-flight reservation slot
+  ✔ 5. Never-consumed / Expired tokens: pruned automatically after TTL
+  ✔ 6. Credit Window boundary: maxCreditWindowUnits blocks unredeemed units above checkpoint
+  ✔ 7. Checkpoint & Resume: updating settledUnits frees credit window for continued playback
+  ✔ 8. Cap Boundaries: maxUnredeemedAmount, maxBillableUnits, and deposit caps
+  ✔ 9. Concurrency Safety: parallel asynchronous requests are serialized correctly
+  ✔ 10. Bounded Store Size: onDeliveryCompleted cleans state.reservations and prunes expired
+  ✔ 11. Store Memory Safety: 1,000 successful deliveries maintain strictly bounded store size
+  ✔ 12. Replay Protection: delivered tokens are recorded and cannot be re-reserved
+1..1 (tests: 12, pass: 12, fail: 0)
 ```
 
 ### HTTP E2E Integration Suite (`node scripts/e2e/e2e.mjs`)
 ```
-Status: PASS (21/21 tests pass, exit code 0)
+Status: PASS (25/25 tests pass, exit code 0)
 Location: scripts/e2e/e2e.mjs against http://localhost:4001
 Command: node scripts/e2e/e2e.mjs
 
 Test Results:
-  ✅ GET /health returns ok + chainId
+  ✅ GET /health returns ok + chainId and updates activeSettlement
   ✅ GET /api/manifest/:streamId returns canonical schema with proofs
   ✅ GET /api/manifest/unknown returns 404 with UNKNOWN_STREAM code
   ✅ Cryptographic Merkle proof validation succeeds for valid segment
@@ -71,7 +74,11 @@ Test Results:
   ✅ GET proof for out-of-range segment returns 404
   ✅ POST /api/access/segment with missing body returns 400
   ✅ POST /api/access/segment with bad sessionId returns 400
+  ✅ POST /api/access/segment with voucher sessionId mismatch returns 400 SESSION_MISMATCH
   ✅ POST /api/access/segment with contract address mismatch returns 400 CONTRACT_MISMATCH
+  ✅ POST /api/access/segment with cumulative units too low returns 402 PAYMENT_REQUIRED
+  ✅ POST /api/access/segment with cumulative units too high returns 400 CUMULATIVE_UNITS_TOO_HIGH
+  ✅ POST /api/access/segment with invalid recipient returns 400
   ✅ POST /api/access/segment with non-existent session returns 401 or 403
   ✅ GET playlist returns m3u8
   ✅ GET content without token returns 401
@@ -84,7 +91,26 @@ Test Results:
   ✅ GET proof for unknown stream returns 404
   ✅ GET playlist for unknown stream returns 404
 
-Results: 21 passed, 0 failed out of 21
+Results: 25 passed, 0 failed out of 25
+```
+
+### Access Service Local Chain Integration Suite (`npx tsx scripts/e2e/access-service-integration.ts`)
+```
+Status: PASS (Configured in CI & executed locally against running local stack)
+Location: scripts/e2e/access-service-integration.ts
+Command: npx tsx scripts/e2e/access-service-integration.ts
+
+Step Verification:
+  1. Open session on-chain with exact canonical pricing policy (0x76422f...)
+  2. Sign EIP-712 voucher for Segment 0 (cumulativeUnits: 2)
+  3. Gate request granted with single-use content token
+  4. Fetch served media bytes, SHA-256 match with manifest segmentSha256
+  5. Cryptographic Merkle proof validated against manifestRoot
+  6. Tampered media bytes and tampered proofs strictly rejected
+  7. Consumed single-use token re-fetch returns 403 (Replay protection)
+  8. Unknown stream (404), out of range (404), too low units (402), too high units (400) rejected
+  9. Mismatched pricing policy on-chain returns 403 POLICY_MISMATCH
+  10. On-chain checkpoint confirmed, synced with /api/session/checkpoint-sync, Segment 1 streamed & verified post-checkpoint, cooperative close & refund confirmed.
 ```
 
 ---

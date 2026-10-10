@@ -15,6 +15,9 @@ const SEGMENT_LEAF_TYPEHASH = keccak256(
   Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
 );
 
+const CANONICAL_PRICING_POLICY_STRING = 'fixed-rate-0.0005-usdc-per-second-unit';
+const CANONICAL_PRICING_POLICY_HASH = keccak256(Buffer.from(CANONICAL_PRICING_POLICY_STRING));
+
 const UNIT_PRICE = 500n; // 0.0005 USDC per unit (6 decimals). 1 unit = 1 second.
 const DURATION_UNITS = 2; // 2 seconds per segment
 
@@ -144,7 +147,7 @@ function generateManifest(streamId) {
     unitPriceUSDC: '0.0005',
     unitPrice: UNIT_PRICE.toString(),
     contentIdHash,
-    pricingPolicyHash: zeroHash,
+    pricingPolicyHash: CANONICAL_PRICING_POLICY_HASH,
     renditionIdHash: zeroHash,
     manifestRoot,
     merkleRoot: manifestRoot,

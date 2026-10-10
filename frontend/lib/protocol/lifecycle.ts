@@ -19,6 +19,7 @@ import {
   type Address,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { CANONICAL_PRICING_POLICY_HASH } from './typedData';
 
 // ─── Settlement ABI (exact matching Solidity) ─────────────────────
 const openAbi = [
@@ -156,6 +157,7 @@ export async function openSession(p: {
   rpc: string; settlement: Address; token: Address;
   creatorKey: Hex; payerKey: Hex; signerKey: Hex;
   recipient: Address; manifestRoot: Hex;
+  contentIdHash?: Hex; pricingPolicyHash?: Hex;
   unitPrice: bigint; maxBillable: bigint; deposit: bigint;
   validSec: number; graceSec: number; maxLead: bigint;
   maxCreditWindow: bigint; maxCreditSegments: number; maxUnredeemedAmount: bigint;
@@ -176,8 +178,8 @@ export async function openSession(p: {
 
   const offer = {
     recipient: p.recipient, token: p.token,
-    contentIdHash: keccak256(Buffer.from('stream-content-monad-keynote-hd')),
-    pricingPolicyHash: keccak256(Buffer.from('fixed-rate-0.01-usdc-per-unit')),
+    contentIdHash: p.contentIdHash || keccak256(Buffer.from('stream-content-monad-keynote-hd')),
+    pricingPolicyHash: p.pricingPolicyHash || CANONICAL_PRICING_POLICY_HASH,
     unitPrice: p.unitPrice, maxBillableUnits: p.maxBillable,
     manifestRoot: p.manifestRoot, maxCreditSegments: p.maxCreditSegments,
     maxCreditWindowUnits: p.maxCreditWindow, maxUnredeemedAmount: p.maxUnredeemedAmount,

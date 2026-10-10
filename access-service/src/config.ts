@@ -6,7 +6,7 @@ import { getAddress, isAddress, type Hex } from 'viem';
 /**
  * All security-relevant values come from the SERVER (env / manifests), never from the HTTP request.
  */
-function readManifestSettlement(): string | undefined {
+export function readManifestSettlement(): string | undefined {
   try {
     const net = process.env.NETWORK || 'local';
     const p = path.join(__dirname, '../../manifests', `${net}.json`);

@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import { type Hex } from 'viem';
-import { config } from './config';
+import { isAddress, getAddress, type Hex } from 'viem';
+import { config, readManifestSettlement } from './config';
 import { checkSessionState, readSession, SESSION_STATUS, getChainId, initChain } from './chain';
 import {
   getManifest,
@@ -65,7 +65,7 @@ app.get('/health', async (_req: Request, res: Response) => {
     service: 'StreamPay Access Service v2.5',
     timestamp: new Date().toISOString(),
     chainId: config.NETWORK === 'local' ? 31337 : 10143,
-    settlement: config.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    settlement: config.SETTLEMENT_ADDRESS || (readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'),
     config: {
       network: config.NETWORK,
       settlementAddress: config.SETTLEMENT_ADDRESS || 'NOT_SET',
@@ -134,8 +134,45 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       voucher,
     } = req.body;
 
-    if (!sessionId || !sessionSigner || !contractAddress || !voucher) {
-      res.status(400).json({ code: 'MISSING_PARAMS', error: 'Missing required parameters' });
+    // Strict input validation with deterministic error responses
+    if (!sessionId || typeof sessionId !== 'string' || !sessionId.startsWith('0x') || sessionId.length !== 66) {
+      res.status(400).json({ code: 'INVALID_SESSION_ID', error: 'Valid 32-byte hex sessionId required' });
+      return;
+    }
+    if (!sessionSigner || typeof sessionSigner !== 'string' || !isAddress(sessionSigner)) {
+      res.status(400).json({ code: 'INVALID_SESSION_SIGNER', error: 'Valid sessionSigner address required' });
+      return;
+    }
+    if (!contractAddress || typeof contractAddress !== 'string' || !isAddress(contractAddress)) {
+      res.status(400).json({ code: 'INVALID_CONTRACT_ADDRESS', error: 'Valid contractAddress required' });
+      return;
+    }
+    if (!voucher || typeof voucher !== 'object') {
+      res.status(400).json({ code: 'MISSING_VOUCHER', error: 'Voucher object is required' });
+      return;
+    }
+    if (!voucher.sessionId || typeof voucher.sessionId !== 'string') {
+      res.status(400).json({ code: 'INVALID_VOUCHER', error: 'voucher.sessionId is required' });
+      return;
+    }
+    if (voucher.sessionId.toLowerCase() !== sessionId.toLowerCase()) {
+      res.status(400).json({
+        code: 'SESSION_MISMATCH',
+        error: 'voucher.sessionId does not match request sessionId',
+        detail: `Request has ${sessionId}, voucher has ${voucher.sessionId}`,
+      });
+      return;
+    }
+    if (voucher.cumulativeUnits === undefined || voucher.cumulativeUnits === null) {
+      res.status(400).json({ code: 'INVALID_VOUCHER', error: 'voucher.cumulativeUnits is required' });
+      return;
+    }
+    if (!voucher.signature || typeof voucher.signature !== 'string' || !voucher.signature.startsWith('0x') || voucher.signature.length < 130) {
+      res.status(400).json({ code: 'INVALID_VOUCHER_SIGNATURE', error: 'Valid voucher signature required' });
+      return;
+    }
+    if (recipient && !isAddress(recipient)) {
+      res.status(400).json({ code: 'INVALID_RECIPIENT', error: 'recipient must be a valid Ethereum address' });
       return;
     }
 
@@ -147,7 +184,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 
     // Server-authoritative network parameters
     const serverChainId = config.NETWORK === 'local' ? 31337 : 10143;
-    const serverSettlement = config.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+    const serverSettlement = config.SETTLEMENT_ADDRESS || (readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512');
 
     if (contractAddress.toLowerCase() !== serverSettlement.toLowerCase()) {
       res.status(400).json({
@@ -173,13 +210,21 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
+    let parsedCumulativeUnits: bigint;
+    try {
+      parsedCumulativeUnits = BigInt(voucher.cumulativeUnits);
+    } catch {
+      res.status(400).json({ code: 'INVALID_VOUCHER', error: 'voucher.cumulativeUnits must be a valid integer' });
+      return;
+    }
+
     const parsedVoucher: Voucher = {
       sessionId: voucher.sessionId as Hex,
-      cumulativeUnits: BigInt(voucher.cumulativeUnits),
+      cumulativeUnits: parsedCumulativeUnits,
       signature: voucher.signature as Hex,
     };
 
-    // Validate payment sufficiency against manifest cumulative units
+    // Strict exact cumulative units matching target segment
     const requiredUnits = BigInt(targetSegment.cumulativeUnits);
     if (parsedVoucher.cumulativeUnits < requiredUnits) {
       res.status(402).json({
@@ -189,10 +234,19 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       });
       return;
     }
+    if (parsedVoucher.cumulativeUnits > requiredUnits) {
+      res.status(400).json({
+        code: 'CUMULATIVE_UNITS_TOO_HIGH',
+        error: 'Voucher cumulative units exceed target segment requirement',
+        detail: `Voucher cumulative units ${parsedVoucher.cumulativeUnits} > required ${requiredUnits}`,
+      });
+      return;
+    }
 
     // On-chain session parameter mapping & verification
     let sessionLimits: SessionLimits;
     let onChainSettledUnits: bigint | undefined;
+    let effectiveRecipient: Hex;
 
     if (config.SETTLEMENT_ADDRESS) {
       const chainCheck = await checkSessionState(sessionId as Hex, sessionSigner as Hex);
@@ -225,11 +279,23 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
         return;
       }
 
+      // Bind voucher-store recipient to on-chain session recipient
+      effectiveRecipient = s.recipient;
+
       // Strict Stream & Content binding check
       if (s.contentIdHash.toLowerCase() !== manifest.contentIdHash.toLowerCase()) {
         res.status(403).json({
           code: 'CONTENT_MISMATCH',
           error: `Session contentIdHash (${s.contentIdHash}) does not match stream (${manifest.contentIdHash})`,
+        });
+        return;
+      }
+
+      // Strict pricing policy equality check
+      if (s.pricingPolicyHash.toLowerCase() !== manifest.pricingPolicyHash.toLowerCase()) {
+        res.status(403).json({
+          code: 'POLICY_MISMATCH',
+          error: `Session pricingPolicyHash (${s.pricingPolicyHash}) does not match stream pricing policy (${manifest.pricingPolicyHash})`,
         });
         return;
       }
@@ -279,6 +345,11 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
         maxBillableUnits: 3600n,
         deposit: 5_000_000n,
       };
+      if (recipient && isAddress(recipient)) {
+        effectiveRecipient = getAddress(recipient) as Hex;
+      } else {
+        effectiveRecipient = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as Hex;
+      }
     }
 
     // Verify EIP-712 Voucher signature
@@ -326,11 +397,11 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       : candidateToken;
 
     if (!reserveCheck.isDuplicate) {
-      // Update off-chain voucher store
+      // Update off-chain voucher store using authoritative effectiveRecipient
       const updateResult = updateSessionVoucher(
         sessionId as Hex,
         sessionSigner as Hex,
-        recipient as Hex,
+        effectiveRecipient,
         serverSettlement as Hex,
         serverChainId,
         parsedVoucher

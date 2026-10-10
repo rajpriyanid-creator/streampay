@@ -33,13 +33,16 @@ export interface ReservationEntry {
   delivered: boolean;
 }
 
+export const MAX_DELIVERED_TOKENS = 500;
+
 export interface SessionState {
   sessionId: string;
   lastCheckpointUnits: bigint;
   limits: SessionLimits;
-  reservations: Map<string, ReservationEntry>; // tokenSig -> entry
+  reservations: Map<string, ReservationEntry>; // tokenSig -> entry (active in-flight only)
   segmentToTokenSig: Map<number, string>;       // segmentIndex -> tokenSig
   completedSegments: Set<number>;
+  deliveredTokens: Map<string, number>;         // tokenSig -> deliveredAtMs (bounded replay protection history)
 }
 
 export class SessionMutex {
@@ -94,6 +97,7 @@ export class ReservationLedger {
         reservations: new Map(),
         segmentToTokenSig: new Map(),
         completedSegments: new Set(),
+        deliveredTokens: new Map(),
       };
       this.sessions.set(key, state);
     } else {
@@ -116,7 +120,7 @@ export class ReservationLedger {
   pruneExpired(state: SessionState, nowMs = Date.now()): number {
     let prunedCount = 0;
     for (const [sig, entry] of state.reservations.entries()) {
-      if (!entry.delivered && nowMs > entry.expiresAtMs) {
+      if (entry.delivered || nowMs > entry.expiresAtMs) {
         state.reservations.delete(sig);
         state.segmentToTokenSig.delete(entry.segmentIndex);
         prunedCount++;
@@ -150,6 +154,22 @@ export class ReservationLedger {
 
       // Clean up any stale expired reservations first
       this.pruneExpired(state, nowMs);
+
+      // 0. Replay protection: check if token was already used for completed delivery
+      if (state.deliveredTokens.has(tokenSig)) {
+        return {
+          allowed: false,
+          reason: 'Token already used for completed delivery (replay rejected)',
+        };
+      }
+
+      // Check if segment was already completed and delivered
+      if (state.completedSegments.has(segmentIndex)) {
+        return {
+          allowed: false,
+          reason: `Segment ${segmentIndex} already delivered and verified. Re-requesting completed segment rejected.`,
+        };
+      }
 
       // 1. Idempotency check: if this segment is already active and unexpired, reuse it
       const existingSig = state.segmentToTokenSig.get(segmentIndex);
@@ -260,18 +280,22 @@ export class ReservationLedger {
 
   /**
    * Called when segment delivery succeeds (bytes flushed to HTTP client).
+   * Safely deletes in-flight reservation and records bounded replay token history.
    */
   async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<void> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return;
-      const res = state.reservations.get(tokenSig);
-      if (res) {
-        res.delivered = true;
-      }
+      state.reservations.delete(tokenSig);
       state.completedSegments.add(segmentIndex);
       state.segmentToTokenSig.delete(segmentIndex);
+
+      state.deliveredTokens.set(tokenSig, Date.now());
+      if (state.deliveredTokens.size > MAX_DELIVERED_TOKENS) {
+        const oldest = state.deliveredTokens.keys().next().value;
+        if (oldest) state.deliveredTokens.delete(oldest);
+      }
     });
   }
 
@@ -314,6 +338,8 @@ export class ReservationLedger {
     inFlightSegments: number;
     completedSegments: number;
     lastCheckpointUnits: bigint;
+    activeReservationsCount: number;
+    deliveredTokensCount: number;
   } | undefined {
     const state = this.sessions.get(sessionId.toLowerCase());
     if (!state) return undefined;
@@ -327,6 +353,8 @@ export class ReservationLedger {
       inFlightSegments: inFlight,
       completedSegments: state.completedSegments.size,
       lastCheckpointUnits: state.lastCheckpointUnits,
+      activeReservationsCount: state.reservations.size,
+      deliveredTokensCount: state.deliveredTokens.size,
     };
   }
 

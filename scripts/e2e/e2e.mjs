@@ -55,16 +55,19 @@ const SEGMENT_LEAF_TYPEHASH = keccak256(
   Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
 );
 
+let activeSettlement = process.env.SETTLEMENT_ADDRESS || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512';
+
 // ─── Tests ─────────────────────────────────────────────────────────
 console.log('\n🧪 StreamPay e2e test suite\n');
 
 // Health
-await test('GET /health returns ok + chainId', async () => {
+await test('GET /health returns ok + chainId and updates activeSettlement', async () => {
   const { status, body } = await json(`${BASE}/health`);
   assertEq(status, 200, 'status');
   assertEq(body.status, 'ok');
   assert(typeof body.chainId === 'number', 'chainId is number');
   assert(body.settlement, 'settlement present');
+  activeSettlement = body.settlement;
 });
 
 // Canonical Manifest Schema & Proofs
@@ -161,7 +164,7 @@ await test('GET proof for out-of-range segment returns 404', async () => {
   assertEq(status, 404, 'status');
 });
 
-// Segment gate – bad inputs
+// Segment gate – bad inputs & validation
 await test('POST /api/access/segment with missing body returns 400', async () => {
   const { status, body } = await post('/api/access/segment', {});
   assertEq(status, 400, 'status');
@@ -171,28 +174,77 @@ await test('POST /api/access/segment with missing body returns 400', async () =>
 await test('POST /api/access/segment with bad sessionId returns 400', async () => {
   const { status } = await post('/api/access/segment', {
     sessionId: 'not-hex', streamId: 'monad-keynote-hd', segmentIndex: 0,
-    contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    sessionSigner: '0x' + 'cc'.repeat(20),
+    contractAddress: activeSettlement,
     voucher: { sessionId: '0x00', cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assertEq(status, 400, 'status');
 });
 
-await test('POST /api/access/segment with contract address mismatch returns 400 CONTRACT_MISMATCH', async () => {
+await test('POST /api/access/segment with voucher sessionId mismatch returns 400 SESSION_MISMATCH', async () => {
   const fakeId = '0x' + 'ab'.repeat(32);
+  const otherId = '0x' + 'cd'.repeat(32);
   const { status, body } = await post('/api/access/segment', {
     sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
-    contractAddress: '0x0000000000000000000000000000000000000001',
+    contractAddress: activeSettlement,
+    voucher: { sessionId: otherId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
+  });
+  assertEq(status, 400, 'status');
+  assertEq(body.code, 'SESSION_MISMATCH', 'code');
+});
+
+await test('POST /api/access/segment with contract address mismatch returns 400 CONTRACT_MISMATCH', async () => {
+  const fakeId = '0x' + 'ab'.repeat(32);
+  const mismatchedAddress = activeSettlement.toLowerCase() === '0x0000000000000000000000000000000000000001'
+    ? '0x0000000000000000000000000000000000000002'
+    : '0x0000000000000000000000000000000000000001';
+  const { status, body } = await post('/api/access/segment', {
+    sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: mismatchedAddress,
     voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assertEq(status, 400, 'status');
   assertEq(body.code, 'CONTRACT_MISMATCH', 'code');
 });
 
+await test('POST /api/access/segment with cumulative units too low returns 402 PAYMENT_REQUIRED', async () => {
+  const fakeId = '0x' + 'ab'.repeat(32);
+  const { status, body } = await post('/api/access/segment', {
+    sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: activeSettlement,
+    voucher: { sessionId: fakeId, cumulativeUnits: '1', signature: '0x' + '00'.repeat(65) },
+  });
+  assertEq(status, 402, 'status');
+  assertEq(body.code, 'PAYMENT_REQUIRED', 'code');
+});
+
+await test('POST /api/access/segment with cumulative units too high returns 400 CUMULATIVE_UNITS_TOO_HIGH', async () => {
+  const fakeId = '0x' + 'ab'.repeat(32);
+  const { status, body } = await post('/api/access/segment', {
+    sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: activeSettlement,
+    voucher: { sessionId: fakeId, cumulativeUnits: '10', signature: '0x' + '00'.repeat(65) },
+  });
+  assertEq(status, 400, 'status');
+  assertEq(body.code, 'CUMULATIVE_UNITS_TOO_HIGH', 'code');
+});
+
+await test('POST /api/access/segment with invalid recipient returns 400', async () => {
+  const fakeId = '0x' + 'ab'.repeat(32);
+  const { status, body } = await post('/api/access/segment', {
+    sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), recipient: 'not-an-address', streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: activeSettlement,
+    voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
+  });
+  assertEq(status, 400, 'status');
+  assertEq(body.code, 'INVALID_RECIPIENT', 'code');
+});
+
 await test('POST /api/access/segment with non-existent session returns 401 or 403', async () => {
   const fakeId = '0x' + 'ab'.repeat(32);
   const { status } = await post('/api/access/segment', {
     sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
-    contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    contractAddress: activeSettlement,
     voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assert(status === 401 || status === 403, `expected 401 or 403, got ${status}`);
@@ -239,7 +291,7 @@ await test('POST gate with unknown stream returns 404 UNKNOWN_STREAM', async () 
   const fakeId = '0x' + 'cd'.repeat(32);
   const { status, body } = await post('/api/access/segment', {
     sessionId: fakeId, sessionSigner: '0x' + 'dd'.repeat(20), streamId: 'nonexistent', segmentIndex: 0,
-    contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    contractAddress: activeSettlement,
     voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assertEq(status, 404, 'status');
@@ -251,7 +303,7 @@ await test('POST gate with negative segmentIndex returns 400', async () => {
   const fakeId = '0x' + 'cd'.repeat(32);
   const { status } = await post('/api/access/segment', {
     sessionId: fakeId, sessionSigner: '0x' + 'dd'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: -1,
-    contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    contractAddress: activeSettlement,
     voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assertEq(status, 400, 'status');

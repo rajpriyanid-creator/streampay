@@ -246,4 +246,102 @@ test('ReservationLedger Suite', async (t) => {
     const stats = ledger.getStats(sessionId, now);
     assert.strictEqual(stats?.inFlightSegments, 1);
   });
+
+  await t.test('10. Bounded Store Size: 1,000 successful deliveries preserve bounded memory and zero active leaks', async () => {
+    ledger.clear();
+    const sessionId = '0xsession10_bounded';
+    const largeLimits: SessionLimits = {
+      maxCreditSegments: 10,
+      maxCreditWindowUnits: 10000n,
+      maxUnredeemedAmount: 5_000_000n,
+      unitPrice: 500n,
+      maxBillableUnits: 100_000n,
+      deposit: 50_000_000n,
+    };
+
+    const now = 1000000;
+
+    // Simulate 1,000 sequential segment deliveries
+    for (let seg = 0; seg < 1000; seg++) {
+      const cumUnits = BigInt((seg + 1) * 2);
+      const token = `token-${seg}`;
+      const tokenSig = `sig-${seg}`;
+
+      const res = await ledger.checkAndReserve(
+        sessionId,
+        largeLimits,
+        seg,
+        cumUnits,
+        token,
+        tokenSig,
+        30,
+        0n,
+        now
+      );
+      assert.strictEqual(res.allowed, true, `segment ${seg} should be allowed`);
+
+      // Delivery completes immediately
+      await ledger.onDeliveryCompleted(sessionId, tokenSig, seg);
+    }
+
+    const finalStats = ledger.getStats(sessionId, now);
+    assert.ok(finalStats, 'finalStats exists');
+    // Active reservations map MUST be completely cleared (0 active reservations)
+    assert.strictEqual(finalStats.activeReservationsCount, 0, 'active reservations must be 0 after completed delivery');
+    assert.strictEqual(finalStats.inFlightSegments, 0, 'in-flight segments must be 0');
+    // Delivered tokens buffer MUST be strictly capped at 500 (MAX_DELIVERED_TOKENS)
+    assert.strictEqual(finalStats.deliveredTokensCount, 500, 'deliveredTokensCount must be capped at 500');
+  });
+
+  await t.test('11. Replay & Duplicate Prevention: already delivered token and completed segment are rejected', async () => {
+    ledger.clear();
+    const sessionId = '0xsession11_replay';
+    const now = 1000000;
+
+    const res0 = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tok0',
+      'sig0',
+      30,
+      0n,
+      now
+    );
+    assert.strictEqual(res0.allowed, true);
+
+    // Complete delivery
+    await ledger.onDeliveryCompleted(sessionId, 'sig0', 0);
+
+    // 1. Re-requesting with same tokenSig must be rejected by replay protection
+    const replayRes = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      1,
+      4n,
+      'tok0',
+      'sig0',
+      30,
+      0n,
+      now
+    );
+    assert.strictEqual(replayRes.allowed, false);
+    assert.match(replayRes.reason!, /replay rejected/);
+
+    // 2. Requesting segment 0 again must be rejected because it is already delivered
+    const segReplayRes = await ledger.checkAndReserve(
+      sessionId,
+      defaultLimits,
+      0,
+      2n,
+      'tok-new',
+      'sig-new',
+      30,
+      0n,
+      now
+    );
+    assert.strictEqual(segReplayRes.allowed, false);
+    assert.match(segReplayRes.reason!, /already delivered/);
+  });
 });

@@ -13,7 +13,7 @@ networks:
     contracts:
       - name: StreamPaySettlement
         address:
-          - "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+          - "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
         handler: src/EventHandlers.ts
         events:
           - event: StreamOpened(bytes32 indexed sessionId, address indexed payer, address indexed recipient, address sessionSigner, bytes32 offerDigest, uint256 initialDeposit, uint64 validUntil, uint64 redemptionGraceSeconds, uint64 redemptionDeadline)

@@ -20,6 +20,8 @@ export function getStreamPayDomain(chainId: number, verifyingContract: string) {
   };
 }
 
+export const CANONICAL_PRICING_POLICY_STRING = 'fixed-rate-0.0005-usdc-per-second-unit';
+export const CANONICAL_PRICING_POLICY_HASH = '0x76422f1e290b9f7982658421843336df3a5b54190454061ecfa6748f5987c500' as const;
 
 // ─── ContentOffer ────────────────────────────────────────────────────
 

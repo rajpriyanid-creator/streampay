@@ -12,6 +12,13 @@ export const STREAMPAY_SETTLEMENT_ABI = [
   },
   {
     type: 'function',
+    name: 'paymentToken',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
     name: 'openWithSignature',
     inputs: [
       {

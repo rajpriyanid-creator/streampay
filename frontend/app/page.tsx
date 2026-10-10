@@ -8,7 +8,7 @@ import {
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import Hls from 'hls.js';
 import { formatUsdc, parseUsdc } from '../lib/protocol/money';
-import { verifyContractDeployed } from '../lib/protocol/contractClient';
+import { verifySettlementContract, verifyContractDeployed } from '../lib/protocol/contractClient';
 import { openSession, signVoucher, checkpoint, closeCooperative } from '../lib/protocol/lifecycle';
 import { createStreamPayFragmentLoader } from '../lib/hls/StreamPayFragmentLoader';
 
@@ -120,7 +120,10 @@ export default function StreamPayDashboard() {
   );
 
   const [contractAddress, setContractAddress] = useState<Hex>(
-    (activeManifest.settlementContract || '0x5FbDB2315678afecb367f032d93F642f64180aa3') as Hex
+    (activeManifest.settlementContract || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Hex
+  );
+  const [paymentTokenAddress, setPaymentTokenAddress] = useState<Address>(
+    (activeManifest.paymentToken?.address || '0x5FbDB2315678afecb367f032d93F642f64180aa3') as Address
   );
   const [isDeployed, setIsDeployed] = useState<boolean>(false);
   const [isWalletConnected, setIsWalletConnected] = useState<boolean>(false);
@@ -205,8 +208,11 @@ export default function StreamPayDashboard() {
   }, []);
 
   const checkDeployment = async () => {
-    const deployed = await verifyContractDeployed(activeManifest.rpcHttp, contractAddress);
-    setIsDeployed(deployed);
+    const res = await verifySettlementContract(activeManifest.rpcHttp, contractAddress, activeManifest.chainId);
+    setIsDeployed(res.valid);
+    if (res.valid && res.paymentToken) {
+      setPaymentTokenAddress(res.paymentToken);
+    }
   };
 
   const fetchManifest = async () => {
@@ -272,7 +278,7 @@ export default function StreamPayDashboard() {
         const res = await openSession({
           rpc: activeManifest.rpcHttp,
           settlement: contractAddress,
-          token: (activeManifest.paymentToken.address || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Address,
+          token: paymentTokenAddress,
           creatorKey: ANVIL_ACCOUNTS.creator,
           payerKey: ANVIL_ACCOUNTS.payer,
           signerKey: ephemeralSignerKey,
@@ -292,7 +298,7 @@ export default function StreamPayDashboard() {
         txHashHex = res.txHash;
         setLastTxHash(res.txHash);
       } else {
-        // Local mode fallback when Anvil node is not running locally
+        // Explicit demo simulation mode when no verified contract exists on-chain
         sessionIdHex = `0x${ephemeralSigner.address.slice(2).padStart(64, '0')}` as Hex;
       }
 
@@ -319,7 +325,7 @@ export default function StreamPayDashboard() {
       setStatusMsg({
         text: isDeployed
           ? `Session Opened On-Chain! ID: ${sessionIdHex.slice(0, 10)}... Tx: ${txHashHex?.slice(0, 10)}... Signer: ${ephemeralSigner.address.slice(0, 10)}...`
-          : `Session Opened (Local Mode)! ID: ${sessionIdHex.slice(0, 10)}... Signer: ${ephemeralSigner.address.slice(0, 10)}... Ready to play stream!`,
+          : `Session Opened (Demo Simulation — Off-Chain)! ID: ${sessionIdHex.slice(0, 10)}... Signer: ${ephemeralSigner.address.slice(0, 10)}... (No verified on-chain settlement contract)`,
         type: 'success',
       });
     } catch (err: any) {
@@ -351,7 +357,10 @@ export default function StreamPayDashboard() {
           accessServiceUrl: ACCESS_SERVICE_URL,
           manifest: manifestData,
           onAccessTokenRequest: async (segIndex: number) => {
-            const nextCumUnits = BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
+            const targetSeg = manifestData?.segments?.[segIndex];
+            const nextCumUnits = targetSeg
+              ? BigInt(targetSeg.cumulativeUnits)
+              : BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
             const signature = await signVoucher({
               settlement: contractAddress,
               signerKey: session.signerKey!,
@@ -386,7 +395,10 @@ export default function StreamPayDashboard() {
             return gateData.segmentToken;
           },
           onSegmentVerified: (segIndex: number, durationUnits: number) => {
-            const nextCumUnits = BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
+            const targetSeg = manifestData?.segments?.[segIndex];
+            const nextCumUnits = targetSeg
+              ? BigInt(targetSeg.cumulativeUnits)
+              : BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
             setCumulativeUnits(nextCumUnits);
             setCurrentSegment(segIndex + 1);
 
@@ -435,12 +447,11 @@ export default function StreamPayDashboard() {
         }
         setIsStreaming(true);
         setStatusMsg({ text: '▶️ Real HLS stream playing. Gated per segment via SHA-256 & Merkle proofs.', type: 'info' });
-      } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
-        videoRef.current.src = `${ACCESS_SERVICE_URL}/api/access/playlist/${selectedStream}.m3u8`;
-        videoRef.current.play().catch((e) => console.log('Safari autoplay:', e));
-        setIsStreaming(true);
       } else {
-        setStatusMsg({ text: 'HLS is not supported in this browser.', type: 'error' });
+        setStatusMsg({
+          text: 'Native HLS playback without custom fragment loader is unsupported in StreamPay v2.5 to prevent ungated content leakage and enforce cryptographic Merkle proof verification. Please use a browser supporting MediaSource Extensions (Chrome, Edge, Firefox, or Safari 17.1+ MSE).',
+          type: 'error',
+        });
       }
     } catch (err: any) {
       setStatusMsg({ text: `Failed to start stream: ${err.message}`, type: 'error' });
@@ -620,9 +631,15 @@ export default function StreamPayDashboard() {
 
       {/* Network/mode warning banner */}
       {networkMode === 'LOCAL' && isWalletConnected && (
-        <div style={{ padding: '8px 16px', borderRadius: '8px', marginBottom: '16px', background: '#78350f', fontSize: '13px' }}>
-          ⚠️ LOCAL DEV MODE — Using Anvil test accounts. Do NOT use with real funds.
-          {!isDeployed && ' | ⛔ Contract not deployed at configured address.'}
+        <div style={{ padding: '10px 16px', borderRadius: '8px', marginBottom: '16px', background: isDeployed ? '#1e293b' : '#1e1b4b', border: isDeployed ? '1px solid #334155' : '1px solid #4338ca', fontSize: '13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>
+            {isDeployed
+              ? '🟢 LOCAL ON-CHAIN MODE — StreamPaySettlement verified on Anvil.'
+              : '🔵 DEMO / OFF-CHAIN SIMULATION MODE — No on-chain settlement contract verified. Actions are simulated off-chain.'}
+          </span>
+          <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+            Settlement: {contractAddress.slice(0, 10)}... | Token: {paymentTokenAddress.slice(0, 10)}...
+          </span>
         </div>
       )}
 
@@ -758,8 +775,15 @@ export default function StreamPayDashboard() {
             </div>
           </div>
 
+          {/* Documented Billing Policy */}
+          <div style={{ marginTop: '12px', padding: '10px 12px', background: '#0a0d14', borderRadius: '6px', border: '1px solid #1e293b' }}>
+            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', lineHeight: '1.4' }}>
+              ℹ️ <strong>Billing Policy:</strong> Charging occurs upon cryptographically verified delivery of each 2-second segment (SHA-256 hash match + Merkle proof against canonical root), entitling the player to buffer and play the segment. Charges reflect verified segment delivery, not passive watched seconds.
+            </p>
+          </div>
+
           {/* Micro-Voucher Log */}
-          <div style={{ marginTop: '24px' }}>
+          <div style={{ marginTop: '20px' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#9ca3af', marginBottom: '8px' }}>Off-Chain Voucher Log</h3>
             <div style={{ maxHeight: '160px', overflowY: 'auto', background: '#0a0d14', borderRadius: '6px', padding: '8px' }}>
               {voucherLogs.length === 0 ? (

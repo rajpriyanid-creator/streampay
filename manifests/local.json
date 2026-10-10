@@ -7,15 +7,14 @@
   "explorers": [],
   "paymentToken": {
     "symbol": "USDC",
-    "address": null,
+    "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
     "expectedDecimals": 6,
     "source": "Local mock deployment"
   },
-  "settlementContract": null,
+  "settlementContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
   "deploymentTxHash": null,
-  "deploymentBlock": null,
+  "deploymentBlock": 1,
   "abiVersion": "streampay-v2.5",
   "eip712Name": "StreamPaySettlement",
   "eip712Version": "2.5"
 }
-
