@@ -192,7 +192,8 @@ async function main() {
   console.log('\nStep 6: Executing Security Negative Tests...');
 
   // 8a. Tampered byte rejection
-  const tamperedLeaf = computeSegmentLeaf(manifest.contentIdHash as Hex, 0, seg0.durationUnits, ('0x' + 'bad'.repeat(21) + '00') as Hex);
+  const tamperedSha256 = ('0x' + 'ba'.repeat(32)) as Hex;
+  const tamperedLeaf = computeSegmentLeaf(manifest.contentIdHash as Hex, 0, seg0.durationUnits, tamperedSha256);
   const tamperedByteProof = verifyMerkleProof(tamperedLeaf, seg0.merkleProof, manifest.manifestRoot as Hex);
   if (tamperedByteProof) throw new Error('Security failure: tampered byte proof verified!');
   console.log('  ✅ Rejection: Tampered byte leaf fails Merkle verification');
