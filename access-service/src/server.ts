@@ -1,152 +1,56 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { verifyVoucherSignature, updateSessionVoucher, getLatestVoucher, getAllVouchers, Voucher } from './voucherStore';
-import { type Hex, keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
+import { type Hex } from 'viem';
+import { config } from './config';
+import { checkSessionState, SESSION_STATUS } from './chain';
+import { getManifest, getMerkleProof, getSegment, getStreamIdList } from './manifest';
+import { mintAccessToken, consumeAccessToken } from './tokens';
+import {
+  verifyVoucherSignature,
+  updateSessionVoucher,
+  getLatestVoucher,
+  getAllVouchers,
+  Voucher,
+} from './voucherStore';
 
 const app = express();
-const PORT = process.env.PORT || 4001;
-
-app.use(cors());
+app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 
-// ─── Single-Use Token Store for Media Segment Delivery ────────────
-interface AccessTokenRecord {
-  sessionId: Hex;
-  segmentIndex: number;
-  expiresAt: number;
-}
-const accessTokenStore = new Map<string, AccessTokenRecord>();
-
-// Clean expired access tokens every 60 seconds
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, record] of accessTokenStore.entries()) {
-    if (now > record.expiresAt) {
-      accessTokenStore.delete(token);
-    }
-  }
-}, 60000);
-
-// ─── Stream Manifest Definition ─────────────────────────────────
-interface StreamSegment {
-  index: number;
-  durationUnits: number;
-  costUSDC: bigint;
-  cumulativeUnits: bigint;
-  contentHash: Hex;
-}
-
-const SEGMENT_DURATION = 2; // seconds
-const UNITS_PER_SEGMENT = 2n;
-
-function hashPair(a: Hex, b: Hex): Hex {
-  const left = a.toLowerCase() < b.toLowerCase() ? a : b;
-  const right = a.toLowerCase() < b.toLowerCase() ? b : a;
-  return keccak256((`${left}${right.slice(2)}`) as Hex);
-}
-
-function createDemoManifest(streamId: string) {
-  const segments: StreamSegment[] = [];
-  let cumUnits = 0n;
-
-  for (let i = 0; i < 20; i++) {
-    cumUnits += UNITS_PER_SEGMENT;
-    const contentHash = keccak256(
-      Buffer.from(`streampay-segment-content-${streamId}-${i}`)
-    );
-    segments.push({
-      index: i,
-      durationUnits: SEGMENT_DURATION,
-      costUSDC: UNITS_PER_SEGMENT * 10000n, // 0.02 USDC per 2s segment
-      cumulativeUnits: cumUnits,
-      contentHash,
-    });
-  }
-
-  // Compute Merkle leaves & root matching Solidity contract format
-  const leaves = segments.map((s) =>
-    keccak256(
-      encodeAbiParameters(
-        parseAbiParameters('uint32, bytes32, uint64'),
-        [s.index, s.contentHash, s.cumulativeUnits]
-      )
-    )
-  );
-
-  const merkleTree = buildMerkleTree(leaves);
-  const merkleRoot = merkleTree[merkleTree.length - 1][0];
-
-  return {
-    streamId,
-    title: 'Monad StreamPay HD Demo Stream',
-    totalSegments: segments.length,
-    totalDurationSec: segments.length * SEGMENT_DURATION,
-    unitPriceUSDC: '0.01',
-    merkleRoot,
-    segments: segments.map((s) => ({
-      index: s.index,
-      durationUnits: s.durationUnits,
-      costUSDC: s.costUSDC.toString(),
-      cumulativeUnits: s.cumulativeUnits.toString(),
-      contentHash: s.contentHash,
-    })),
-    treeLayers: merkleTree,
-  };
-}
-
-function buildMerkleTree(leaves: Hex[]): Hex[][] {
-  if (leaves.length === 0) return [[]];
-  let currentLayer = [...leaves];
-  const layers: Hex[][] = [currentLayer];
-
-  while (currentLayer.length > 1) {
-    const nextLayer: Hex[] = [];
-    for (let i = 0; i < currentLayer.length; i += 2) {
-      if (i + 1 < currentLayer.length) {
-        nextLayer.push(hashPair(currentLayer[i], currentLayer[i + 1]));
-      } else {
-        nextLayer.push(hashPair(currentLayer[i], currentLayer[i]));
-      }
-    }
-    layers.push(nextLayer);
-    currentLayer = nextLayer;
-  }
-  return layers;
-}
-
-function getMerkleProof(layers: Hex[][], index: number): Hex[] {
-  const proof: Hex[] = [];
-  let currIdx = index;
-
-  for (let i = 0; i < layers.length - 1; i++) {
-    const layer = layers[i];
-    const isRightChild = currIdx % 2 === 1;
-    const pairIdx = isRightChild ? currIdx - 1 : currIdx + 1;
-
-    if (pairIdx < layer.length) {
-      proof.push(layer[pairIdx]);
-    } else {
-      proof.push(layer[currIdx]);
-    }
-    currIdx = Math.floor(currIdx / 2);
-  }
-  return proof;
-}
-
-const activeManifests = new Map<string, ReturnType<typeof createDemoManifest>>();
-
 // ─── Health Check ────────────────────────────────────────────────
-app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', service: 'StreamPay Access Service v2.5', timestamp: new Date().toISOString() });
+app.get('/health', async (_req: Request, res: Response) => {
+  let chainState: Record<string, any> = { configured: false };
+  if (config.SETTLEMENT_ADDRESS) {
+    try {
+      chainState = {
+        configured: true,
+        settlementAddress: config.SETTLEMENT_ADDRESS,
+        network: config.NETWORK,
+      };
+    } catch (e: any) {
+      chainState = { configured: true, error: e.message };
+    }
+  }
+
+  res.json({
+    status: 'ok',
+    service: 'StreamPay Access Service v2.5',
+    timestamp: new Date().toISOString(),
+    config: {
+      network: config.NETWORK,
+      settlementAddress: config.SETTLEMENT_ADDRESS || 'NOT_SET',
+      corsOrigin: config.CORS_ORIGIN,
+      requireOnChainSession: config.REQUIRE_ONCHAIN_SESSION,
+    },
+    chain: chainState,
+    availableStreams: getStreamIdList(),
+  });
 });
 
 // ─── Stream Manifest Endpoint ──────────────────────────────────
 app.get('/api/manifest/:streamId', (req: Request, res: Response) => {
   const { streamId } = req.params;
-  if (!activeManifests.has(streamId)) {
-    activeManifests.set(streamId, createDemoManifest(streamId));
-  }
-  const manifest = activeManifests.get(streamId)!;
+  const manifest = getManifest(streamId);
   res.json(manifest);
 });
 
@@ -154,20 +58,18 @@ app.get('/api/manifest/:streamId', (req: Request, res: Response) => {
 app.get('/api/manifest/:streamId/segment/:index/proof', (req: Request, res: Response) => {
   const { streamId, index } = req.params;
   const idx = parseInt(index, 10);
+  const segment = getSegment(streamId, idx);
 
-  if (!activeManifests.has(streamId)) {
-    activeManifests.set(streamId, createDemoManifest(streamId));
-  }
-  const manifest = activeManifests.get(streamId)!;
-
-  if (idx < 0 || idx >= manifest.segments.length) {
+  if (!segment) {
     res.status(404).json({ error: 'Segment index out of range' });
     return;
   }
 
-  const proof = getMerkleProof(manifest.treeLayers, idx);
+  const manifest = getManifest(streamId);
+  const proof = getMerkleProof(streamId, idx);
+
   res.json({
-    segment: manifest.segments[idx],
+    segment,
     proof,
     merkleRoot: manifest.merkleRoot,
   });
@@ -198,13 +100,21 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       signature: voucher.signature as Hex,
     };
 
-    // 1. Get stream manifest
-    if (!activeManifests.has(streamId)) {
-      activeManifests.set(streamId, createDemoManifest(streamId));
+    // 0. Validate contract address matches server configuration if set
+    if (
+      config.SETTLEMENT_ADDRESS &&
+      contractAddress.toLowerCase() !== config.SETTLEMENT_ADDRESS.toLowerCase()
+    ) {
+      res.status(400).json({
+        error: 'Contract address mismatch',
+        detail: `Expected server settlement address ${config.SETTLEMENT_ADDRESS}, got ${contractAddress}`,
+      });
+      return;
     }
-    const manifest = activeManifests.get(streamId)!;
-    const targetSegment = manifest.segments[segmentIndex];
 
+    // 1. Get target segment from manifest
+    const idx = Number(segmentIndex);
+    const targetSegment = getSegment(streamId || 'demo-stream', idx);
     if (!targetSegment) {
       res.status(404).json({ error: `Segment ${segmentIndex} not found in stream ${streamId}` });
       return;
@@ -220,7 +130,19 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. Verify EIP-712 Voucher signature against sessionSigner
+    // 3. Optional on-chain session state verification against contract
+    if (config.REQUIRE_ONCHAIN_SESSION) {
+      const chainCheck = await checkSessionState(sessionId as Hex, sessionSigner as Hex);
+      if (!chainCheck.valid) {
+        res.status(403).json({
+          error: 'On-chain session validation failed',
+          reason: chainCheck.reason,
+        });
+        return;
+      }
+    }
+
+    // 4. Verify EIP-712 Voucher signature against sessionSigner
     const isValidSig = await verifyVoucherSignature(
       parsedVoucher,
       sessionSigner as Hex,
@@ -233,7 +155,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 4. Update off-chain voucher store (enforces session identity binding)
+    // 5. Update off-chain voucher store (enforces session identity binding + monotonicity)
     const updateResult = updateSessionVoucher(
       sessionId as Hex,
       sessionSigner as Hex,
@@ -248,24 +170,16 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 5. Issue single-use timed access token (60 seconds validity)
-    const segmentToken = keccak256(
-      Buffer.from(`auth-token-${sessionId}-${segmentIndex}-${Date.now()}-${Math.random()}`)
-    ) as Hex;
-
-    accessTokenStore.set(segmentToken, {
-      sessionId: sessionId as Hex,
-      segmentIndex: Number(segmentIndex),
-      expiresAt: Date.now() + 60000,
-    });
+    // 6. Issue single-use timed access token
+    const segmentToken = mintAccessToken(sessionId as Hex, idx);
 
     res.json({
       success: true,
       sessionId,
-      segmentIndex,
+      segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      contentUrl: `/api/access/content/${streamId}/segment_${segmentIndex}.ts?token=${segmentToken}`,
+      contentUrl: `/api/access/content/${streamId || 'demo-stream'}/segment_${idx}.ts?token=${segmentToken}`,
     });
   } catch (err: any) {
     console.error('Error processing gated segment request:', err);
@@ -281,24 +195,15 @@ app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Respon
     return;
   }
 
-  const tokenRecord = accessTokenStore.get(token);
-  if (!tokenRecord) {
-    res.status(403).json({ error: 'Forbidden: Invalid or expired segment access token' });
+  const consumption = consumeAccessToken(token);
+  if (!consumption.valid || !consumption.record) {
+    res.status(403).json({ error: 'Forbidden', reason: consumption.reason });
     return;
   }
-
-  if (Date.now() > tokenRecord.expiresAt) {
-    accessTokenStore.delete(token);
-    res.status(403).json({ error: 'Forbidden: Segment access token has expired' });
-    return;
-  }
-
-  // Consume token (single-use pattern)
-  accessTokenStore.delete(token);
 
   // Return binary media payload for segment
   const segmentData = Buffer.from(
-    `STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_SESSION_${tokenRecord.sessionId}`
+    `STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_SESSION_${consumption.record.sessionId}`
   );
   res.setHeader('Content-Type', 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store, private');
@@ -308,10 +213,7 @@ app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Respon
 // ─── HLS Master Playlist Provider Route ───────────────────────────
 app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => {
   const { streamId } = req.params;
-  if (!activeManifests.has(streamId)) {
-    activeManifests.set(streamId, createDemoManifest(streamId));
-  }
-  const manifest = activeManifests.get(streamId)!;
+  const manifest = getManifest(streamId);
 
   let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
 
@@ -363,6 +265,11 @@ app.get('/api/vouchers', (_req: Request, res: Response) => {
   res.json({ vouchers });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 StreamPay Access Service listening on http://localhost:${PORT}`);
+app.listen(config.PORT, () => {
+  console.log(`🚀 StreamPay Access Service listening on http://localhost:${config.PORT}`);
+  if (config.SETTLEMENT_ADDRESS) {
+    console.log(`🔒 Contract Settlement Address: ${config.SETTLEMENT_ADDRESS}`);
+  } else {
+    console.log(`⚠️  SETTLEMENT_ADDRESS not set — running in permissive local mode`);
+  }
 });
