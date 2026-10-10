@@ -160,7 +160,7 @@ async function main() {
     throw new Error(`Gate rejected segment 0: ${gateRes0.status} ${errBody}`);
   }
   const gateData0 = await gateRes0.json();
-  if (!gateData0.granted || !gateData0.contentUrl) {
+  if ((!gateData0.granted && !gateData0.success) || !gateData0.contentUrl) {
     throw new Error(`Access not granted: ${JSON.stringify(gateData0)}`);
   }
   console.log(`  ✅ Access granted! Single-use contentUrl: ${gateData0.contentUrl}`);
@@ -384,6 +384,9 @@ async function main() {
   });
   if (!gateRes1.ok) throw new Error(`Gate rejected segment 1: ${gateRes1.status}`);
   const gateData1 = await gateRes1.json();
+  if ((!gateData1.granted && !gateData1.success) || !gateData1.contentUrl) {
+    throw new Error(`Gate rejected segment 1: ${JSON.stringify(gateData1)}`);
+  }
   const contentRes1 = await fetch(`${ACCESS_URL}${gateData1.contentUrl}`);
   if (!contentRes1.ok) throw new Error(`Failed to fetch segment 1: ${contentRes1.status}`);
   const buf1 = Buffer.from(await contentRes1.arrayBuffer());

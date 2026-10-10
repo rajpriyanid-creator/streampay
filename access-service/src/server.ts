@@ -420,6 +420,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
+      granted: true,
       sessionId,
       segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
