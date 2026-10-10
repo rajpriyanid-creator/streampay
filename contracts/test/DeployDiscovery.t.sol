@@ -13,9 +13,9 @@ contract DeployDiscoveryTest is Test {
     address public creator;
 
     function setUp() public {
-        owner = makeAddr("owner");
-        payer = makeAddr("payer");
-        creator = makeAddr("creator");
+        owner = address(0x1111);
+        payer = address(0x2222);
+        creator = address(0x3333);
 
         mockUSDC = new MockUSDC();
         settlement = new StreamPaySettlement(address(mockUSDC), owner);
@@ -75,7 +75,7 @@ contract DeployDiscoveryTest is Test {
 
         StreamPaySettlement.SessionConfig memory cfg = StreamPaySettlement.SessionConfig({
             payer: payer,
-            sessionSigner: makeAddr("signer"),
+            sessionSigner: address(0x4444),
             offerDigest: offerDigest,
             initialDeposit: 10_000,
             maxLeadUnits: 10,
