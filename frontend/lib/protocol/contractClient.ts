@@ -11,12 +11,23 @@ import {
   type Hex,
   type Address,
   keccak256,
+  hashTypedData,
   encodeAbiParameters,
   parseAbiParameters,
 } from 'viem';
 import { monadTestnet } from '../account/chains';
 import { STREAMPAY_SETTLEMENT_ABI } from './abi';
-import { getStreamPayDomain, CONTENT_OFFER_TYPES, SESSION_CONFIG_TYPES, VOUCHER_TYPES, CLOSE_ACK_TYPES } from './typedData';
+import {
+  getStreamPayDomain,
+  CONTENT_OFFER_TYPES,
+  SESSION_CONFIG_TYPES,
+  VOUCHER_TYPES,
+  CLOSE_ACK_TYPES,
+  type ContentOffer,
+  type SessionConfig,
+  type Voucher,
+  type CloseAck,
+} from './typedData';
 
 export interface DeploymentConfig {
   network: string;
@@ -56,35 +67,67 @@ export async function verifyContractDeployed(
 }
 
 /**
- * Computes contentOffer digest matching Solidity contract.
+ * Computes ContentOffer EIP-712 digest matching Solidity contract `_hashTypedDataV4`.
  */
 export function computeContentOfferDigest(
   chainId: number,
   verifyingContract: Address,
-  offer: any
+  offer: ContentOffer | any
 ): Hex {
-  const domain = getStreamPayDomain(chainId, verifyingContract);
-  // Typed data hashing
-  return keccak256(
-    encodeAbiParameters(
-      parseAbiParameters('address, address, bytes32, bytes32, uint256, uint64, bytes32, uint8, uint64, uint256, uint256, uint64, uint64'),
-      [
-        offer.recipient,
-        offer.token,
-        offer.contentIdHash,
-        offer.pricingPolicyHash,
-        offer.unitPrice,
-        offer.maxBillableUnits,
-        offer.manifestRoot,
-        offer.maxCreditSegments,
-        offer.maxCreditWindowUnits,
-        offer.maxUnredeemedAmount,
-        offer.offerNonce,
-        offer.issuedAt,
-        offer.expiresAt,
-      ]
-    )
-  );
+  return hashTypedData({
+    domain: getStreamPayDomain(chainId, verifyingContract),
+    types: CONTENT_OFFER_TYPES,
+    primaryType: 'ContentOffer',
+    message: offer,
+  });
+}
+
+/**
+ * Computes SessionConfig EIP-712 digest matching Solidity contract `_hashTypedDataV4`.
+ */
+export function computeSessionConfigDigest(
+  chainId: number,
+  verifyingContract: Address,
+  config: SessionConfig | any
+): Hex {
+  return hashTypedData({
+    domain: getStreamPayDomain(chainId, verifyingContract),
+    types: SESSION_CONFIG_TYPES,
+    primaryType: 'SessionConfig',
+    message: config,
+  });
+}
+
+/**
+ * Computes Voucher EIP-712 digest matching Solidity contract `_hashTypedDataV4`.
+ */
+export function computeVoucherDigest(
+  chainId: number,
+  verifyingContract: Address,
+  voucher: Voucher | any
+): Hex {
+  return hashTypedData({
+    domain: getStreamPayDomain(chainId, verifyingContract),
+    types: VOUCHER_TYPES,
+    primaryType: 'Voucher',
+    message: voucher,
+  });
+}
+
+/**
+ * Computes CloseAck EIP-712 digest matching Solidity contract `_hashTypedDataV4`.
+ */
+export function computeCloseAckDigest(
+  chainId: number,
+  verifyingContract: Address,
+  ack: CloseAck | any
+): Hex {
+  return hashTypedData({
+    domain: getStreamPayDomain(chainId, verifyingContract),
+    types: CLOSE_ACK_TYPES,
+    primaryType: 'CloseAck',
+    message: ack,
+  });
 }
 
 /**

@@ -22,7 +22,7 @@ jobs:
 
       - name: Install Monorepo Dependencies
         run: |
-          npm ci || npm install
+          npm ci
           npm run install:all
 
       - name: TypeScript Check Access Service

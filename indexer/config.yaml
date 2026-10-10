@@ -1,0 +1,20 @@
+name: streampay-indexer
+description: StreamPay v2.5 Envio HyperIndex event indexer for Monad testnet & local network
+networks:
+  - id: 10143
+    start_block: 0
+    contracts:
+      - name: StreamPaySettlement
+        address:
+          - "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+        handler: src/EventHandlers.ts
+        events:
+          - event: StreamOpened(bytes32 indexed sessionId, address indexed payer, address indexed recipient, address sessionSigner, bytes32 offerDigest, uint256 initialDeposit, uint64 validUntil, uint64 redemptionGraceSeconds, uint64 redemptionDeadline)
+          - event: StreamPolicyBound(bytes32 indexed sessionId, bytes32 contentIdHash, bytes32 pricingPolicyHash, bytes32 manifestRoot, uint256 unitPrice, uint64 maxBillableUnits, uint64 maxLeadUnits, uint8 maxCreditSegments, uint64 maxCreditWindowUnits, uint256 maxUnredeemedAmount, uint64 offerExpiresAt)
+          - event: StreamCheckpointed(bytes32 indexed sessionId, uint64 cumulativeUnits, uint256 cumulativeAmount, uint256 delta, uint256 totalSettled)
+          - event: CloseRequested(bytes32 indexed sessionId, uint64 closeRequestedAt, uint64 challengeEndsAt)
+          - event: StreamClosed(bytes32 indexed sessionId, uint256 totalPaidOrCredited, uint256 refundAllocated, uint8 closeReason)
+          - event: PayoutCredited(address indexed token, address indexed account, uint256 amount, string reason)
+          - event: Claimed(address indexed token, address indexed account, uint256 amount)
+          - event: Paused(address account)
+          - event: Unpaused(address account)

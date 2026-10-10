@@ -1,0 +1,17 @@
+{
+  "name": "streampay-indexer",
+  "version": "2.5.0",
+  "description": "Envio HyperIndex event indexer for StreamPay Settlement contract",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "build": "envio build",
+    "start": "envio start"
+  },
+  "dependencies": {
+    "envio": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

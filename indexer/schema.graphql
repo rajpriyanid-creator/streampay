@@ -1,0 +1,59 @@
+type StreamSession {
+  id: ID! # sessionId
+  payer: String!
+  recipient: String!
+  sessionSigner: String!
+  offerDigest: String!
+  initialDeposit: BigInt!
+  validUntil: BigInt!
+  redemptionGraceSeconds: BigInt!
+  redemptionDeadline: BigInt!
+  contentIdHash: String
+  pricingPolicyHash: String
+  manifestRoot: String
+  unitPrice: BigInt
+  maxBillableUnits: BigInt
+  maxLeadUnits: BigInt
+  maxCreditSegments: Int
+  maxCreditWindowUnits: BigInt
+  maxUnredeemedAmount: BigInt
+  offerExpiresAt: BigInt
+  settledUnits: BigInt!
+  settledAmount: BigInt!
+  status: String!
+  closeRequestedAt: BigInt
+  challengeEndsAt: BigInt
+  totalPaidOrCredited: BigInt
+  refundAllocated: BigInt
+  closeReason: String
+  openedAtBlock: BigInt!
+  openedAtTimestamp: BigInt!
+}
+
+type Checkpoint {
+  id: ID! # sessionId-txHash-logIndex
+  session: StreamSession!
+  cumulativeUnits: BigInt!
+  cumulativeAmount: BigInt!
+  delta: BigInt!
+  totalSettled: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+}
+
+type ClaimableCredit {
+  id: ID! # token-account
+  token: String!
+  account: String!
+  amount: BigInt!
+  lastUpdated: BigInt!
+}
+
+type Claim {
+  id: ID! # token-account-txHash-logIndex
+  token: String!
+  account: String!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+}
