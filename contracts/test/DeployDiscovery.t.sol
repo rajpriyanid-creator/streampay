@@ -26,20 +26,20 @@ contract DeployDiscoveryTest is Test {
     /// @notice Proves MockUSDC cannot be mistaken for StreamPaySettlement.
     /// Calling paymentToken() or getSession() on MockUSDC reverts.
     function test_MockUSDC_CannotBeMistakenFor_Settlement() public {
-        // Attempting to call StreamPaySettlement(address(mockUSDC)).paymentToken() must revert
+        // Attempting to call settlement paymentToken() selector on mockUSDC must revert
         (bool success, ) = address(mockUSDC).staticcall(
-            abi.encodeWithSelector(StreamPaySettlement.paymentToken.selector)
+            abi.encodeWithSelector(settlement.paymentToken.selector)
         );
         assertFalse(success, "MockUSDC must not respond to settlement paymentToken() selector");
 
-        // Attempting to call getSession on mockUSDC must revert
+        // Attempting to call getSession selector on mockUSDC must revert
         (bool successSession, ) = address(mockUSDC).staticcall(
-            abi.encodeWithSelector(StreamPaySettlement.getSession.selector, bytes32(0))
+            abi.encodeWithSelector(settlement.getSession.selector, bytes32(0))
         );
         assertFalse(successSession, "MockUSDC must not respond to getSession selector");
 
         // Real settlement responds with the exact payment token
-        assertEq(settlement.paymentToken(), address(mockUSDC), "Settlement payment token must match deployed token");
+        assertEq(address(settlement.paymentToken()), address(mockUSDC), "Settlement payment token must match deployed token");
     }
 
     /// @notice Proves that an offer with a mismatched token cannot open a session on settlement.
@@ -84,9 +84,11 @@ contract DeployDiscoveryTest is Test {
         vm.startPrank(payer);
         otherToken.approve(address(settlement), 10_000);
 
-        // Must revert with TokenMismatch
-        vm.expectRevert(StreamPaySettlement.TokenMismatch.selector);
-        settlement.openWithSignature(badOffer, "sig", cfg, "sig");
+        bytes memory dummySig = new bytes(65);
+
+        // Must revert with InvalidOffer because offer.token != settlement.paymentToken()
+        vm.expectRevert(StreamPaySettlement.InvalidOffer.selector);
+        settlement.openWithSignature(badOffer, dummySig, cfg, dummySig);
         vm.stopPrank();
     }
 }
