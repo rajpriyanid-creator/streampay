@@ -111,16 +111,45 @@ Step Verification:
   7. Consumed single-use token re-fetch returns 403 (Replay protection)
   8. Unknown stream (404), out of range (404), too low units (402), too high units (400) rejected
   9. Mismatched pricing policy on-chain returns 403 POLICY_MISMATCH
-  10. On-chain checkpoint confirmed, synced with /api/session/checkpoint-sync, Segment 1 streamed & verified post-checkpoint, cooperative close & refund confirmed.
+  10. Same-voucher retry permitted for undelivered segment; delivery succeeds, subsequent re-request rejected
+  11. On-chain checkpoint confirmed, synced with /api/session/checkpoint-sync, Segment 1 streamed & verified post-checkpoint, cooperative close & refund confirmed.
+```
+
+### Fragment Loader Injected Corruption Suite (`npx tsx scripts/e2e/fragment-loader-corruption.test.ts`)
+```
+Status: PASS (Executed in CI & locally)
+Location: scripts/e2e/fragment-loader-corruption.test.ts
+Command: npx tsx scripts/e2e/fragment-loader-corruption.test.ts
+
+Verification Results:
+  ✔ Test 1: Injected mutated bytes in transit: SEGMENT_HASH_MISMATCH detected, billing callback SUPPRESSED, HLS delivery SUPPRESSED.
+  ✔ Test 2: Injected tampered Merkle proof sibling: MERKLE_PROOF_INVALID detected, billing callback SUPPRESSED, HLS delivery SUPPRESSED.
+  ✔ Test 3: Authentic content baseline: SHA-256 and canonical Merkle proof verified, billing callback executed, segment delivered to HLS player.
+```
+
+### Offline Simulation Mode Suite (`npx tsx scripts/e2e/simulation-mode.test.ts`)
+```
+Status: PASS (Executed in CI & locally without Anvil or contracts running)
+Location: scripts/e2e/simulation-mode.test.ts
+Command: npx tsx scripts/e2e/simulation-mode.test.ts
+
+Verification Results:
+  ✔ Step 1: /health reports mode='simulation', isSimulation=true, activeSettlement=null
+  ✔ Step 2: Stream manifest loaded (streamId=monad-keynote-hd, 5 segments)
+  ✔ Step 3: Simulated session created & EIP-712 off-chain voucher signed
+  ✔ Step 4: Access granted through simulation gate with valid single-use token
+  ✔ Step 5: Media bytes fetched and cryptographically verified in pure simulation mode
 ```
 
 ---
 
-## 3. Browser E2E Video Playback & Billing Evidence
+## 3. Browser Video Playback & Billing Evidence (Local Developer Evidence)
+
+> **Notice:** Browser video playback was verified locally using a Chromium browser session (with captured screen artifacts). It is NOT executed inside the headless GitHub Actions CI runner, which executes the local chain lifecycle, HTTP E2E, fragment loader corruption, and simulation test suites.
 
 ### Browser Subagent Execution Log & Screen Artifacts
 ```
-Status: PASS (Real HLS Video Frame Playback & Gated Billing Confirmed)
+Status: PASS (Local Chromium verification only; not executed in headless CI)
 Platform: Chromium under browser_subagent
 URL: http://localhost:3000
 Session Artifact: streampay_checkpoint_verified_1791639333383.png

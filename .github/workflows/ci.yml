@@ -151,8 +151,14 @@ jobs:
           }
           cat /tmp/integ.log
 
+          echo "Running Fragment Loader Injected Corruption & Merkle Verification Suite..."
+          npx tsx scripts/e2e/fragment-loader-corruption.test.ts
+
           kill $SVC_PID || true
           kill $ANVIL_PID || true
+
+          echo "Running Offline Simulation Mode Integration Suite (No Anvil / No Contract)..."
+          npx tsx scripts/e2e/simulation-mode.test.ts
 
       # Upload test artifacts
       - name: Upload Test Results

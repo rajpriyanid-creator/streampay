@@ -17,10 +17,14 @@ import { reservationLedger, SessionLimits } from './reservationStore';
 import {
   verifyVoucherSignature,
   updateSessionVoucher,
+  markVoucherDelivered,
   getLatestVoucher,
   getAllVouchers,
   Voucher,
 } from './voucherStore';
+
+export let activeMode: 'onchain' | 'simulation' = config.SIMULATION_MODE ? 'simulation' : 'onchain';
+export let activeSettlement: Hex | undefined = config.SIMULATION_MODE ? undefined : config.SETTLEMENT_ADDRESS;
 
 const app = express();
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
@@ -47,32 +51,30 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/health', async (_req: Request, res: Response) => {
-  let chainState: Record<string, any> = { configured: false };
-  if (config.SETTLEMENT_ADDRESS) {
-    try {
-      chainState = {
-        configured: true,
-        settlementAddress: config.SETTLEMENT_ADDRESS,
-        network: config.NETWORK,
-      };
-    } catch (e: any) {
-      chainState = { configured: true, error: e.message };
-    }
-  }
-
+  const isSim = activeMode === 'simulation';
   res.json({
     status: 'ok',
     service: 'StreamPay Access Service v2.5',
+    mode: activeMode,
+    isSimulation: isSim,
+    simulation: isSim,
     timestamp: new Date().toISOString(),
     chainId: config.NETWORK === 'local' ? 31337 : 10143,
-    settlement: config.SETTLEMENT_ADDRESS || (readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'),
+    settlement: activeSettlement || (isSim ? null : (readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512')),
+    activeSettlement: activeSettlement || null,
     config: {
       network: config.NETWORK,
-      settlementAddress: config.SETTLEMENT_ADDRESS || 'NOT_SET',
+      mode: activeMode,
+      settlementAddress: activeSettlement || 'NOT_SET',
       corsOrigin: config.CORS_ORIGIN,
-      requireOnChainSession: Boolean(config.SETTLEMENT_ADDRESS || config.NETWORK !== 'local'),
+      requireOnChainSession: activeMode === 'onchain',
     },
-    chain: chainState,
+    chain: {
+      configured: Boolean(activeSettlement),
+      settlementAddress: activeSettlement || null,
+      network: config.NETWORK,
+      mode: activeMode,
+    },
     availableStreams: getStreamIdList(),
   });
 });
@@ -184,15 +186,28 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 
     // Server-authoritative network parameters
     const serverChainId = config.NETWORK === 'local' ? 31337 : 10143;
-    const serverSettlement = config.SETTLEMENT_ADDRESS || (readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512');
+    const serverSettlement = activeSettlement || (activeMode === 'onchain'
+      ? (config.SETTLEMENT_ADDRESS || readManifestSettlement() || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512')
+      : undefined);
 
-    if (contractAddress.toLowerCase() !== serverSettlement.toLowerCase()) {
-      res.status(400).json({
-        code: 'CONTRACT_MISMATCH',
-        error: 'Contract address mismatch',
-        detail: `Server uses ${serverSettlement}, request has ${contractAddress}`,
-      });
-      return;
+    if (activeMode === 'onchain') {
+      if (!serverSettlement || contractAddress.toLowerCase() !== serverSettlement.toLowerCase()) {
+        res.status(400).json({
+          code: 'CONTRACT_MISMATCH',
+          error: 'Contract address mismatch',
+          detail: `Server uses ${serverSettlement}, request has ${contractAddress}`,
+        });
+        return;
+      }
+    } else {
+      // In simulation mode, ensure a valid hex contract address format is supplied
+      if (!contractAddress || typeof contractAddress !== 'string' || !contractAddress.startsWith('0x') || contractAddress.length !== 42) {
+        res.status(400).json({
+          code: 'CONTRACT_MISMATCH',
+          error: 'Valid contract address required',
+        });
+        return;
+      }
     }
 
     // Enforce stream allowlist
@@ -248,7 +263,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     let onChainSettledUnits: bigint | undefined;
     let effectiveRecipient: Hex;
 
-    if (config.SETTLEMENT_ADDRESS) {
+    if (activeMode === 'onchain' && activeSettlement) {
       const chainCheck = await checkSessionState(sessionId as Hex, sessionSigner as Hex);
       if (!chainCheck.valid || !chainCheck.session) {
         res.status(403).json({
@@ -327,8 +342,8 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       };
       onChainSettledUnits = s.settledUnits;
     } else {
-      // Non-local mode without settlement address must fail closed
-      if (config.NETWORK !== 'local') {
+      // Non-local mode without simulation mode must fail closed
+      if (config.NETWORK !== 'local' && !config.SIMULATION_MODE) {
         res.status(500).json({
           code: 'CONFIGURATION_ERROR',
           error: 'SETTLEMENT_ADDRESS required in non-local mode',
@@ -336,12 +351,12 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
         return;
       }
 
-      // Local permissive fallback
+      // Simulation mode fallback parameters
       sessionLimits = {
-        maxCreditSegments: 3,
-        maxCreditWindowUnits: 10n,
-        maxUnredeemedAmount: 50000n,
-        unitPrice: UNIT_PRICE,
+        maxCreditSegments: 6,
+        maxCreditWindowUnits: 12n,
+        maxUnredeemedAmount: 100000n,
+        unitPrice: BigInt(manifest.unitPrice),
         maxBillableUnits: 3600n,
         deposit: 5_000_000n,
       };
@@ -353,10 +368,11 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     }
 
     // Verify EIP-712 Voucher signature
+    const verifyingContract = (activeMode === 'onchain' ? serverSettlement : contractAddress) as Hex;
     const isValidSig = await verifyVoucherSignature(
       parsedVoucher,
       sessionSigner as Hex,
-      serverSettlement as Hex,
+      verifyingContract,
       serverChainId
     );
 
@@ -402,7 +418,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
         sessionId as Hex,
         sessionSigner as Hex,
         effectiveRecipient,
-        serverSettlement as Hex,
+        verifyingContract,
         serverChainId,
         parsedVoucher
       );
@@ -474,8 +490,11 @@ app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: 
   }
 
   // Delivery tracking: release / complete reservation on actual HTTP stream outcome
-  res.on('finish', () => {
-    reservationLedger.onDeliveryCompleted(sessKey, tokenSig, segmentIndex);
+  res.on('finish', async () => {
+    const outcome = await reservationLedger.onDeliveryCompleted(sessKey, tokenSig, segmentIndex);
+    if (outcome?.cumulativeUnits !== undefined) {
+      markVoucherDelivered(sessKey as Hex, outcome.cumulativeUnits);
+    }
   });
   res.on('close', () => {
     if (!res.writableEnded) {
@@ -577,10 +596,16 @@ app.get('/api/vouchers', requireAdmin, (_req: Request, res: Response) => {
 
 app.listen(config.PORT, async () => {
   console.log(`🚀 StreamPay Access Service listening on http://localhost:${config.PORT}`);
-  if (config.SETTLEMENT_ADDRESS) {
+  if (config.SIMULATION_MODE) {
+    activeMode = 'simulation';
+    activeSettlement = undefined;
+    console.log(`🧪 Running in explicit SIMULATION_MODE`);
+  } else if (config.SETTLEMENT_ADDRESS) {
     console.log(`🔒 Contract Settlement Address: ${config.SETTLEMENT_ADDRESS}`);
     try {
       const cid = await initChain();
+      activeMode = 'onchain';
+      activeSettlement = config.SETTLEMENT_ADDRESS;
       console.log(`🔗 Connected to chain ${cid}`);
     } catch (e: any) {
       console.error(`⛔ Chain init error: ${e.message}`);
@@ -588,13 +613,14 @@ app.listen(config.PORT, async () => {
         console.error('Fatal: Non-local chain initialization failed. Exiting.');
         process.exit(1);
       }
+      console.warn(`⚠️ Local settlement contract unreachable (${e.message}). Switching to explicit off-chain simulation mode.`);
+      activeMode = 'simulation';
+      activeSettlement = undefined;
     }
   } else {
-    if (config.NETWORK !== 'local') {
-      console.error('Fatal: SETTLEMENT_ADDRESS missing in non-local mode. Exiting.');
-      process.exit(1);
-    }
-    console.log(`⚠️  SETTLEMENT_ADDRESS not set — running in permissive local mode`);
+    activeMode = 'simulation';
+    activeSettlement = undefined;
+    console.log(`⚠️  SETTLEMENT_ADDRESS not set — running in explicit local simulation mode`);
   }
-  console.log(`📋 Allowed streams: ${getStreamIdList().join(', ')}`);
+  console.log(`📋 Active mode: ${activeMode} | Allowed streams: ${getStreamIdList().join(', ')}`);
 });

@@ -21,7 +21,9 @@ export interface StoredSessionVoucher {
   contractAddress: Hex;
   chainId: number;
   highestCumulativeUnits: bigint;
+  deliveredCumulativeUnits: bigint;
   lastVoucher: Voucher;
+  lastDeliveredVoucher?: Voucher;
   lastUpdated: number;
   totalServedSegments: number;
 }
@@ -67,7 +69,8 @@ export async function verifyVoucherSignature(
 /**
  * Records and updates voucher state for a given session.
  * Binds immutable session identity (signer, recipient, contractAddress, chainId).
- * Enforces monotonic cumulativeUnits increments.
+ * Enforces monotonic cumulativeUnits increments, while permitting idempotent retries
+ * for vouchers whose segments have not yet been successfully delivered.
  */
 export function updateSessionVoucher(
   sessionId: Hex,
@@ -76,7 +79,7 @@ export function updateSessionVoucher(
   contractAddress: Hex,
   chainId: number,
   voucher: Voucher
-): { success: boolean; reason?: string } {
+): { success: boolean; reason?: string; isRetry?: boolean } {
   const key = sessionId.toLowerCase();
   const existing = voucherStore.get(key);
 
@@ -103,18 +106,34 @@ export function updateSessionVoucher(
       return { success: false, reason: 'Chain ID mismatch' };
     }
 
-    // Monotonicity check
-    if (voucher.cumulativeUnits <= existing.highestCumulativeUnits) {
+    // Monotonicity / Retry check
+    if (voucher.cumulativeUnits < existing.highestCumulativeUnits) {
       return {
         success: false,
-        reason: `Cumulative units non-monotonic: ${voucher.cumulativeUnits} <= existing ${existing.highestCumulativeUnits}`,
+        reason: `Cumulative units non-monotonic: ${voucher.cumulativeUnits} < existing ${existing.highestCumulativeUnits}`,
       };
     }
 
+    if (voucher.cumulativeUnits === existing.highestCumulativeUnits) {
+      // If this cumulative level has already been delivered, reject duplicate billing
+      if (existing.deliveredCumulativeUnits >= voucher.cumulativeUnits) {
+        return {
+          success: false,
+          reason: `Cumulative units ${voucher.cumulativeUnits} already delivered. Duplicate request rejected.`,
+        };
+      }
+
+      // Segment was reserved previously but NOT delivered (e.g. failed/expired token).
+      // Permit safe retry with the same voucher.
+      existing.lastVoucher = voucher;
+      existing.lastUpdated = Date.now();
+      return { success: true, isRetry: true };
+    }
+
+    // New higher cumulative units for subsequent segment
     existing.highestCumulativeUnits = voucher.cumulativeUnits;
     existing.lastVoucher = voucher;
     existing.lastUpdated = Date.now();
-    existing.totalServedSegments += 1;
   } else {
     voucherStore.set(key, {
       sessionId,
@@ -123,13 +142,30 @@ export function updateSessionVoucher(
       contractAddress,
       chainId,
       highestCumulativeUnits: voucher.cumulativeUnits,
+      deliveredCumulativeUnits: 0n,
       lastVoucher: voucher,
       lastUpdated: Date.now(),
-      totalServedSegments: 1,
+      totalServedSegments: 0,
     });
   }
 
   return { success: true };
+}
+
+/**
+ * Marks voucher delivery as completed upon successful HTTP content delivery.
+ */
+export function markVoucherDelivered(sessionId: Hex, cumulativeUnits: bigint): void {
+  const key = sessionId.toLowerCase();
+  const existing = voucherStore.get(key);
+  if (existing) {
+    if (cumulativeUnits > existing.deliveredCumulativeUnits) {
+      existing.deliveredCumulativeUnits = cumulativeUnits;
+    }
+    existing.lastDeliveredVoucher = existing.lastVoucher;
+    existing.totalServedSegments += 1;
+    existing.lastUpdated = Date.now();
+  }
 }
 
 /**

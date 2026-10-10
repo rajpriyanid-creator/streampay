@@ -281,12 +281,15 @@ export class ReservationLedger {
   /**
    * Called when segment delivery succeeds (bytes flushed to HTTP client).
    * Safely deletes in-flight reservation and records bounded replay token history.
+   * Returns cumulative units of the delivered reservation.
    */
-  async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<void> {
+  async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<{ cumulativeUnits?: bigint }> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
       const state = this.sessions.get(sessionId.toLowerCase());
-      if (!state) return;
+      if (!state) return {};
+      const res = state.reservations.get(tokenSig);
+      const units = res?.cumulativeUnits;
       state.reservations.delete(tokenSig);
       state.completedSegments.add(segmentIndex);
       state.segmentToTokenSig.delete(segmentIndex);
@@ -296,7 +299,16 @@ export class ReservationLedger {
         const oldest = state.deliveredTokens.keys().next().value;
         if (oldest) state.deliveredTokens.delete(oldest);
       }
+      return { cumulativeUnits: units };
     });
+  }
+
+  /**
+   * Checks if a segment was already delivered and completed for a session.
+   */
+  isSegmentCompleted(sessionId: string, segmentIndex: number): boolean {
+    const state = this.sessions.get(sessionId.toLowerCase());
+    return state ? state.completedSegments.has(segmentIndex) : false;
   }
 
   /**

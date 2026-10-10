@@ -397,8 +397,97 @@ async function main() {
   }
   console.log(`  ✅ Segment 1 delivered and verified post-checkpoint (SHA-256: ${sha1})`);
 
+  // 10. Failed / Expired delivery retry verification
+  console.log('\nStep 10: Testing same-voucher retry for undelivered segment...');
+  const { sessionId: retrySessionId, signerAddress: retrySigner } = await openSession({
+    rpc: RPC, settlement, token, creatorKey: CREATOR_KEY, payerKey: PAYER_KEY, signerKey: SIGNER_KEY,
+    recipient,
+    manifestRoot: manifest.manifestRoot as Hex,
+    contentIdHash: manifest.contentIdHash as Hex,
+    pricingPolicyHash: CANONICAL_PRICING_POLICY_HASH,
+    unitPrice,
+    maxBillable: 3600n,
+    deposit,
+    validSec: 3600,
+    graceSec: 3600,
+    maxLead: 12n,
+    maxCreditWindow: 10n,
+    maxCreditSegments: 5,
+    maxUnredeemedAmount: 5000n,
+  });
+
+  const retryVoucherSig = await signVoucher({
+    rpc: RPC, settlement, signerKey: SIGNER_KEY, sessionId: retrySessionId, cumulativeUnits: 2n,
+  });
+
+  // Request token 1
+  const firstReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: retrySessionId,
+      sessionSigner: retrySigner,
+      contractAddress: settlement,
+      streamId: 'monad-keynote-hd',
+      segmentIndex: 0,
+      voucher: { sessionId: retrySessionId, cumulativeUnits: '2', signature: retryVoucherSig },
+    }),
+  });
+  if (!firstReqRes.ok) throw new Error(`First gate request failed: ${firstReqRes.status}`);
+  const firstGateData = await firstReqRes.json();
+  const token1 = firstGateData.segmentToken;
+
+  // Simulate undelivered token: token 1 is never consumed at /content
+  // Retry segment 0 with the EXACT same voucher (cumulativeUnits: 2)
+  const retryReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: retrySessionId,
+      sessionSigner: retrySigner,
+      contractAddress: settlement,
+      streamId: 'monad-keynote-hd',
+      segmentIndex: 0,
+      voucher: { sessionId: retrySessionId, cumulativeUnits: '2', signature: retryVoucherSig },
+    }),
+  });
+  if (!retryReqRes.ok) throw new Error(`Retry gate request failed: ${retryReqRes.status}`);
+  const retryGateData = await retryReqRes.json();
+  if (!retryGateData.granted && !retryGateData.success) {
+    throw new Error('Retry was rejected even though segment was never delivered');
+  }
+  console.log('  ✅ Retry permitted: Same voucher for undelivered segment granted replacement token');
+
+  // Fetch content with the retry token
+  const contentResRetry = await fetch(`${ACCESS_URL}${retryGateData.contentUrl}`);
+  if (!contentResRetry.ok) throw new Error(`Failed to fetch retry content: ${contentResRetry.status}`);
+  const bufRetry = Buffer.from(await contentResRetry.arrayBuffer());
+  const shaRetry = ('0x' + crypto.createHash('sha256').update(bufRetry).digest('hex')) as Hex;
+  if (shaRetry.toLowerCase() !== seg0.segmentSha256.toLowerCase()) {
+    throw new Error('Retried segment content SHA-256 mismatch');
+  }
+  console.log('  ✅ Delivery succeeded on retry: Media bytes verified');
+
+  // Segment 0 is now delivered. Requesting it again with the same voucher must now fail!
+  const thirdReqRes = await fetch(`${ACCESS_URL}/api/access/segment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: retrySessionId,
+      sessionSigner: retrySigner,
+      contractAddress: settlement,
+      streamId: 'monad-keynote-hd',
+      segmentIndex: 0,
+      voucher: { sessionId: retrySessionId, cumulativeUnits: '2', signature: retryVoucherSig },
+    }),
+  });
+  if (thirdReqRes.status !== 400 && thirdReqRes.status !== 402) {
+    throw new Error(`Expected rejection for already-delivered segment, got ${thirdReqRes.status}`);
+  }
+  console.log('  ✅ Duplicate delivery rejected: Already delivered segment rejected on subsequent attempt');
+
   // 11. Cooperative session close & refund
-  console.log('\nStep 10: Cooperatively closing session on-chain & refunding excess escrow...');
+  console.log('\nStep 11: Cooperatively closing session on-chain & refunding excess escrow...');
   const closeTx = await closeCooperative({
     rpc: RPC, settlement, anyKey: PAYER_KEY, creatorKey: CREATOR_KEY,
     sessionId, cumulativeUnits: 4n, voucherSig: v1Sig,

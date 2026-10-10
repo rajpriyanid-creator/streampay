@@ -51,7 +51,7 @@ interface VoucherLog {
   segmentIndex: number;
   timestamp: string;
   signature: Hex;
-  status: 'SIGNED' | 'VERIFIED_OFFCHAIN' | 'CHECKPOINTED_ONCHAIN';
+  status: 'SIGNED' | 'VERIFIED_OFFCHAIN' | 'CHECKPOINTED_ONCHAIN' | 'CHECKPOINTED_OFFCHAIN';
 }
 
 /**
@@ -525,12 +525,15 @@ export default function StreamPayDashboard() {
           : null
       );
       setVoucherLogs((prev) =>
-        prev.map((log) => ({ ...log, status: 'CHECKPOINTED_ONCHAIN' as const }))
+        prev.map((log) => ({
+          ...log,
+          status: isDeployed ? ('CHECKPOINTED_ONCHAIN' as const) : ('CHECKPOINTED_OFFCHAIN' as const),
+        }))
       );
       setStatusMsg({
         text: isDeployed
           ? `Checkpoint Confirmed! Tx: ${txHash.slice(0, 12)}... Settled ${formatUsdc(totalSpent)} USDC on-chain. Credit window refreshed!`
-          : `Checkpoint Recorded (Local Mode)! Settled ${formatUsdc(totalSpent)} USDC off-chain. Credit window refreshed!`,
+          : `Simulated Checkpoint Recorded Off-Chain! Settled ${formatUsdc(totalSpent)} USDC. Credit window refreshed!`,
         type: 'success',
       });
     } catch (err: any) {
@@ -581,7 +584,9 @@ export default function StreamPayDashboard() {
 
       setSession((prev) => (prev ? { ...prev, status: 'CLOSED', txHash, signerKey: undefined } : null));
       setStatusMsg({
-        text: `Close Confirmed! Tx: ${txHash.slice(0, 12)}... Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
+        text: isDeployed
+          ? `Close Confirmed! Tx: ${txHash.slice(0, 12)}... Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`
+          : `Simulated Close & Refund Completed! Creator credited ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -693,7 +698,13 @@ export default function StreamPayDashboard() {
                 cursor: session?.status === 'OPEN' || !canOpenSession ? 'not-allowed' : 'pointer',
               }}
             >
-              {session?.status === 'OPEN' ? 'Session Open' : !canOpenSession ? 'Connect Wallet & Load Manifest First' : 'Open Session On-Chain'}
+              {session?.status === 'OPEN'
+                ? 'Session Open'
+                : !canOpenSession
+                ? 'Connect Wallet & Load Manifest First'
+                : isDeployed
+                ? 'Open Session On-Chain'
+                : 'Open Session (Simulation)'}
             </button>
           </div>
 
@@ -716,14 +727,14 @@ export default function StreamPayDashboard() {
               disabled={!session || session.status !== 'OPEN'}
               style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
-              Checkpoint On-Chain
+              {isDeployed ? 'Checkpoint On-Chain' : 'Simulate Checkpoint'}
             </button>
             <button
               onClick={handleCloseSession}
               disabled={!session || session.status === 'CLOSED'}
               style={{ flex: 1, background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
-              Close & Refund
+              {isDeployed ? 'Close & Refund On-Chain' : 'Simulate Close & Refund'}
             </button>
           </div>
         </div>

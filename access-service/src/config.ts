@@ -38,4 +38,5 @@ export const config = {
   rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN || 240),
   REQUIRE_ONCHAIN_SESSION: process.env.REQUIRE_ONCHAIN_SESSION === 'true',
   NETWORK: process.env.NETWORK || 'local',
+  SIMULATION_MODE: process.env.SIMULATION_MODE === 'true',
 };
