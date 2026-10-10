@@ -1,17 +1,19 @@
 /**
  * StreamPay Custom HLS.js Fragment Loader
  * Gates every segment request through the access service.
- * Validates segment integrity (SHA-256 + Merkle proof) before voucher signing.
+ * Enforces fail-closed token acquisition, binary payload fetch,
+ * and cryptographic validation (SHA-256 + Canonical Merkle Proof) before delivery and billing.
  *
  * Standardized to canonical StreamPaySegmentLeaf struct hashing.
  */
 
 import type Hls from 'hls.js';
-import type { SegmentManifest } from '../protocol/typedData';
+import type { SegmentManifest, SegmentManifestEntry } from '../protocol/typedData';
 import { hashSegmentBytes, computeSegmentLeaf, verifyMerkleProof } from '../protocol/manifest';
 
 export interface StreamPayLoaderConfig {
   sessionId: string;
+  streamId?: string;
   accessServiceUrl: string;
   manifest: SegmentManifest;
   onSegmentVerified?: (segmentIndex: number, durationUnits: number) => void;
@@ -62,18 +64,52 @@ export function createStreamPayFragmentLoader(
     private async executeGatedLoad(context: any, callbacks: any): Promise<void> {
       const url: string = context.url;
       const match = url.match(/segment[_-](\d+)/i) || url.match(/(\d+)\.ts$/);
-      const segmentIndex = match ? parseInt(match[1], 10) : 0;
+      if (!match) {
+        throw new Error(`FAIL_CLOSED: Cannot determine segment index from url: ${url}`);
+      }
+      const segmentIndex = parseInt(match[1], 10);
 
-      // 1. Obtain single-use access token
-      let token = '';
-      if (config.onAccessTokenRequest) {
-        token = await config.onAccessTokenRequest(segmentIndex);
+      // Determine streamId dynamically — fail-closed if missing
+      const streamId = config.streamId || config.manifest?.streamId;
+      if (!streamId) {
+        throw new Error('FAIL_CLOSED: Missing streamId in StreamPay loader configuration');
       }
 
-      // 2. Build gated content URL
-      const fetchUrl = token
-        ? `${config.accessServiceUrl}/api/access/content/monad-keynote-hd/segment_${segmentIndex}.ts?token=${token}`
-        : url;
+      // Fail-closed validation of manifest entry and Merkle proof
+      if (!config.manifest || !Array.isArray(config.manifest.segments)) {
+        throw new Error('FAIL_CLOSED: Segment manifest missing or invalid');
+      }
+
+      const manifestEntry = config.manifest.segments.find(
+        (s) => s.segmentIndex === segmentIndex
+      );
+
+      if (!manifestEntry) {
+        const reason = `FAIL_CLOSED: Missing manifest entry for segment ${segmentIndex}`;
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
+      }
+
+      if (!manifestEntry.merkleProof || !Array.isArray(manifestEntry.merkleProof) || manifestEntry.merkleProof.length === 0) {
+        const reason = `FAIL_CLOSED: Missing or empty Merkle proof for segment ${segmentIndex}`;
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
+      }
+
+      // 1. Obtain single-use access token — fail closed if not provided
+      if (!config.onAccessTokenRequest) {
+        throw new Error('FAIL_CLOSED: onAccessTokenRequest handler not configured');
+      }
+
+      const token = await config.onAccessTokenRequest(segmentIndex);
+      if (!token || typeof token !== 'string' || token.trim() === '') {
+        const reason = `FAIL_CLOSED: Access token required for segment ${segmentIndex}`;
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
+      }
+
+      // 2. Build gated content URL bound to streamId and segment
+      const fetchUrl = `${config.accessServiceUrl}/api/access/content/${encodeURIComponent(streamId)}/segment_${segmentIndex}.ts?token=${encodeURIComponent(token)}`;
 
       // 3. Fetch binary segment bytes
       const response = await fetch(fetchUrl, {
@@ -91,49 +127,49 @@ export function createStreamPayFragmentLoader(
       this.stats.total = bytes.byteLength;
       this.stats.loading.first = performance.now();
 
-      // 4. Verify segment integrity (SHA-256 + Canonical Merkle Proof)
-      if (config.manifest && config.manifest.segments) {
-        const manifestEntry = config.manifest.segments.find(
-          (s) => s.segmentIndex === segmentIndex
-        );
+      // 4. Strict cryptographic verification (SHA-256 + Canonical Merkle Proof)
+      // A plain HTTP 200 is explicitly insufficient.
+      const segmentHash = await hashSegmentBytes(bytes);
 
-        if (manifestEntry) {
-          const segmentHash = await hashSegmentBytes(bytes);
-
-          // Verify SHA-256 hash
-          if (manifestEntry.segmentSha256 && segmentHash.toLowerCase() !== manifestEntry.segmentSha256.toLowerCase()) {
-            const reason = 'SEGMENT_HASH_MISMATCH';
-            config.onSegmentFailed?.(segmentIndex, reason);
-            throw new Error(reason);
-          }
-
-          // Verify Canonical Merkle proof using StreamPaySegmentLeaf
-          const leaf = computeSegmentLeaf({
-            contentIdHash: config.manifest.contentIdHash as `0x${string}`,
-            segmentIndex: manifestEntry.segmentIndex,
-            durationUnits: manifestEntry.durationUnits,
-            segmentSha256: (manifestEntry.segmentSha256 || segmentHash) as `0x${string}`,
-          });
-
-          const proofValid = verifyMerkleProof(
-            leaf,
-            (manifestEntry.merkleProof || []) as `0x${string}`[],
-            config.manifest.manifestRoot as `0x${string}`
-          );
-
-          if (!proofValid) {
-            const reason = 'MERKLE_PROOF_INVALID';
-            config.onSegmentFailed?.(segmentIndex, reason);
-            throw new Error(reason);
-          }
-
-          config.onSegmentVerified?.(segmentIndex, manifestEntry.durationUnits);
-        }
+      if (manifestEntry.segmentSha256 && segmentHash.toLowerCase() !== manifestEntry.segmentSha256.toLowerCase()) {
+        const reason = `SEGMENT_HASH_MISMATCH: expected ${manifestEntry.segmentSha256}, got ${segmentHash}`;
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
       }
+
+      const manifestRoot = (config.manifest.manifestRoot || config.manifest.merkleRoot) as `0x${string}`;
+      if (!manifestRoot) {
+        const reason = 'FAIL_CLOSED: Missing manifest root in configuration';
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
+      }
+
+      const leaf = computeSegmentLeaf({
+        contentIdHash: config.manifest.contentIdHash as `0x${string}`,
+        segmentIndex: manifestEntry.segmentIndex,
+        durationUnits: manifestEntry.durationUnits,
+        renditionIdHash: (manifestEntry.renditionIdHash || ('0x' + '00'.repeat(32))) as `0x${string}`,
+        segmentSha256: manifestEntry.segmentSha256 as `0x${string}`,
+      });
+
+      const proofValid = verifyMerkleProof(
+        leaf,
+        manifestEntry.merkleProof as `0x${string}`[],
+        manifestRoot
+      );
+
+      if (!proofValid) {
+        const reason = `MERKLE_PROOF_INVALID: Leaf ${leaf} failed verification against root ${manifestRoot}`;
+        config.onSegmentFailed?.(segmentIndex, reason);
+        throw new Error(reason);
+      }
+
+      // 5. Bill only AFTER successful verification of exact bytes and proof
+      config.onSegmentVerified?.(segmentIndex, manifestEntry.durationUnits);
 
       this.stats.loading.end = performance.now();
 
-      // 5. Deliver segment bytes to HLS.js
+      // 6. Deliver verified segment bytes to HLS.js pipeline
       callbacks.onSuccess(
         {
           url: fetchUrl,

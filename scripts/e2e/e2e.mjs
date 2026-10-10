@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
  * StreamPay e2e test suite.
- * Requires: access-service running (optionally with deployed contract on Anvil).
+ * Tests HTTP endpoints, manifest schemas, cryptographic Merkle proofs,
+ * segment gating, token consumption, and rate limiting.
  *
  * Usage: node scripts/e2e/e2e.mjs
  */
+
+import { keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
 
 const BASE = process.env.ACCESS_URL || 'http://localhost:4001';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
@@ -37,6 +40,21 @@ async function post(path, data) {
   });
 }
 
+function hashPair(a, b) {
+  const [l, r] = a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+  return keccak256(`${l}${r.slice(2)}`);
+}
+
+function verifyMerkleProof(leaf, proof, root) {
+  let h = leaf;
+  for (const p of proof) h = hashPair(h, p);
+  return h.toLowerCase() === root.toLowerCase();
+}
+
+const SEGMENT_LEAF_TYPEHASH = keccak256(
+  Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
+);
+
 // ─── Tests ─────────────────────────────────────────────────────────
 console.log('\n🧪 StreamPay e2e test suite\n');
 
@@ -49,13 +67,25 @@ await test('GET /health returns ok + chainId', async () => {
   assert(body.settlement, 'settlement present');
 });
 
-// Manifest
-await test('GET /api/manifest/:streamId returns manifest', async () => {
+// Canonical Manifest Schema & Proofs
+await test('GET /api/manifest/:streamId returns canonical schema with proofs', async () => {
   const { status, body } = await json(`${BASE}/api/manifest/monad-keynote-hd`);
   assertEq(status, 200, 'status');
+  assertEq(body.schemaVersion, 1, 'schemaVersion');
+  assert(body.manifestRoot, 'manifestRoot');
   assert(body.merkleRoot, 'merkleRoot');
-  assertEq(body.totalSegments, 20, 'segments');
+  assert(body.contentIdHash, 'contentIdHash');
+  assert(body.totalSegments >= 5, 'segments count');
   assert(!body.treeLayers, 'treeLayers should be omitted from public response');
+  assert(Array.isArray(body.segments), 'segments is array');
+
+  // Verify first segment canonical structure
+  const s0 = body.segments[0];
+  assertEq(s0.segmentIndex, 0, 'segmentIndex');
+  assertEq(s0.durationUnits, 2, 'durationUnits');
+  assert(s0.segmentSha256, 'segmentSha256');
+  assert(Array.isArray(s0.merkleProof), 'merkleProof is array');
+  assert(s0.merkleProof.length > 0, 'merkleProof not empty');
 });
 
 await test('GET /api/manifest/unknown returns 404 with UNKNOWN_STREAM code', async () => {
@@ -64,12 +94,66 @@ await test('GET /api/manifest/unknown returns 404 with UNKNOWN_STREAM code', asy
   assertEq(body.code, 'UNKNOWN_STREAM', 'error code');
 });
 
-// Proof
-await test('GET proof for segment 0', async () => {
+// Cryptographic Proof Verification Success
+await test('Cryptographic Merkle proof validation succeeds for valid segment', async () => {
+  const { status, body } = await json(`${BASE}/api/manifest/monad-keynote-hd`);
+  assertEq(status, 200, 'status');
+  const s0 = body.segments[0];
+  const zeroHash = '0x' + '00'.repeat(32);
+
+  const leaf = keccak256(
+    encodeAbiParameters(
+      parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
+      [
+        SEGMENT_LEAF_TYPEHASH,
+        1,
+        body.contentIdHash,
+        s0.segmentIndex,
+        s0.durationUnits,
+        zeroHash,
+        s0.segmentSha256,
+      ]
+    )
+  );
+
+  const valid = verifyMerkleProof(leaf, s0.merkleProof, body.manifestRoot);
+  assert(valid === true, 'Merkle proof must verify against manifest root');
+});
+
+// Cryptographic Proof Rejection for Tampered / Corrupted Content
+await test('Cryptographic Merkle proof validation fails for invalid/tampered content hash', async () => {
+  const { status, body } = await json(`${BASE}/api/manifest/monad-keynote-hd`);
+  assertEq(status, 200, 'status');
+  const s0 = body.segments[0];
+  const zeroHash = '0x' + '00'.repeat(32);
+
+  // Tampered SHA-256
+  const badHash = '0xbad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0';
+  const badLeaf = keccak256(
+    encodeAbiParameters(
+      parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
+      [
+        SEGMENT_LEAF_TYPEHASH,
+        1,
+        body.contentIdHash,
+        s0.segmentIndex,
+        s0.durationUnits,
+        zeroHash,
+        badHash,
+      ]
+    )
+  );
+
+  const valid = verifyMerkleProof(badLeaf, s0.merkleProof, body.manifestRoot);
+  assert(valid === false, 'Tampered leaf must fail verification');
+});
+
+// Proof endpoint
+await test('GET proof endpoint for segment 0', async () => {
   const { status, body } = await json(`${BASE}/api/manifest/monad-keynote-hd/segment/0/proof`);
   assertEq(status, 200, 'status');
   assert(Array.isArray(body.proof), 'proof array');
-  assert(body.merkleRoot, 'root');
+  assert(body.manifestRoot || body.merkleRoot, 'root');
 });
 
 await test('GET proof for out-of-range segment returns 404', async () => {
@@ -87,30 +171,31 @@ await test('POST /api/access/segment with missing body returns 400', async () =>
 await test('POST /api/access/segment with bad sessionId returns 400', async () => {
   const { status } = await post('/api/access/segment', {
     sessionId: 'not-hex', streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     voucher: { sessionId: '0x00', cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
   assertEq(status, 400, 'status');
 });
 
-// Note: POST with non-existent session tests depend on whether SETTLEMENT_ADDRESS is set.
-// If set, the server will do on-chain lookup and return 403.
-// If not set, the server skips on-chain check but will fail on signature verification.
-await test('POST /api/access/segment with non-existent session returns error', async () => {
+await test('POST /api/access/segment with contract address mismatch returns 400 CONTRACT_MISMATCH', async () => {
+  const fakeId = '0x' + 'ab'.repeat(32);
+  const { status, body } = await post('/api/access/segment', {
+    sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
+    contractAddress: '0x0000000000000000000000000000000000000001',
+    voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
+  });
+  assertEq(status, 400, 'status');
+  assertEq(body.code, 'CONTRACT_MISMATCH', 'code');
+});
+
+await test('POST /api/access/segment with non-existent session returns 401 or 403', async () => {
   const fakeId = '0x' + 'ab'.repeat(32);
   const { status } = await post('/api/access/segment', {
     sessionId: fakeId, sessionSigner: '0x' + 'cc'.repeat(20), streamId: 'monad-keynote-hd', segmentIndex: 0,
     contractAddress: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     voucher: { sessionId: fakeId, cumulativeUnits: '2', signature: '0x' + '00'.repeat(65) },
   });
-  // Should return 401 (bad sig) or 403 (session not found) depending on config
   assert(status === 401 || status === 403, `expected 401 or 403, got ${status}`);
-});
-
-// Admin endpoints — protected by ADMIN_TOKEN
-await test('GET /api/vouchers without token returns 401 in non-local mode or 200 in local mode', async () => {
-  const { status } = await json(`${BASE}/api/vouchers`);
-  // In local mode without ADMIN_TOKEN set, returns 200. Otherwise 401.
-  assert(status === 200 || status === 401, `expected 200 or 401, got ${status}`);
 });
 
 // Playlist

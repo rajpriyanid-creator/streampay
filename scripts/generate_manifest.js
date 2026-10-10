@@ -1,9 +1,9 @@
 /**
  * StreamPay Unified Merkle Manifest Generator Utility
- * Generates sample segment manifests with deterministic Keccak-256 Merkle trees
- * matching the canonical StreamPaySegmentLeaf struct.
+ * Generates canonical segment manifests from real media fixtures with
+ * deterministic Keccak-256 Merkle trees matching the canonical StreamPaySegmentLeaf struct.
  *
- * Segment hashes use real SHA-256 of deterministic segment bytes.
+ * Segment hashes use real SHA-256 of the exact bytes served.
  * Unit price: 500 base units (0.0005 USDC per second/unit).
  */
 const crypto = require('crypto');
@@ -16,6 +16,7 @@ const SEGMENT_LEAF_TYPEHASH = keccak256(
 );
 
 const UNIT_PRICE = 500n; // 0.0005 USDC per unit (6 decimals). 1 unit = 1 second.
+const DURATION_UNITS = 2; // 2 seconds per segment
 
 function hashPair(a, b) {
   const left = a.toLowerCase() < b.toLowerCase() ? a : b;
@@ -23,111 +24,141 @@ function hashPair(a, b) {
   return keccak256(`${left}${right.slice(2)}`);
 }
 
-/**
- * Generate deterministic segment content bytes.
- * Same algorithm as access-service/src/manifest.ts for consistency.
- */
-function generateSegmentBytes(streamId, segmentIndex) {
-  const packetCount = 7; // 7 × 188 = 1316 bytes per segment
-  const buf = Buffer.alloc(packetCount * 188);
-  for (let p = 0; p < packetCount; p++) {
-    buf[p * 188] = 0x47; // TS sync byte
-    const seed = crypto.createHash('sha256')
-      .update(`${streamId}-segment-${segmentIndex}-packet-${p}`)
-      .digest();
-    seed.copy(buf, p * 188 + 1, 0, Math.min(seed.length, 187));
+function buildMerkleTree(leaves) {
+  if (leaves.length === 0) return [[]];
+  let cur = [...leaves];
+  const layers = [cur];
+  while (cur.length > 1) {
+    const next = [];
+    for (let i = 0; i < cur.length; i += 2) {
+      next.push(hashPair(cur[i], i + 1 < cur.length ? cur[i + 1] : cur[i]));
+    }
+    layers.push(next);
+    cur = next;
   }
-  return buf;
+  return layers;
 }
 
-/**
- * Compute real SHA-256 of segment bytes (NOT keccak256 of a label).
- */
+function getMerkleProof(layers, index) {
+  const proof = [];
+  let idx = index;
+  for (let i = 0; i < layers.length - 1; i++) {
+    const layer = layers[i];
+    let siblingIdx = idx % 2 === 1 ? idx - 1 : (idx + 1 < layer.length ? idx + 1 : idx);
+    proof.push(layer[siblingIdx]);
+    idx = Math.floor(idx / 2);
+  }
+  return proof;
+}
+
 function computeSegmentSha256(bytes) {
   const hash = crypto.createHash('sha256').update(bytes).digest();
   return `0x${hash.toString('hex')}`;
 }
 
-function generateManifest(streamId, segmentCount, unitsPerSegment) {
-  const segments = [];
-  let cumulativeUnits = 0n;
-  const UNITS_PER_SEG = BigInt(unitsPerSegment);
-  const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
-  const zeroRendition = '0x' + '00'.repeat(32);
-
-  for (let i = 0; i < segmentCount; i++) {
-    cumulativeUnits += UNITS_PER_SEG;
-
-    // Generate real segment bytes and compute SHA-256
-    const segBytes = generateSegmentBytes(streamId, i);
-    const segmentSha256 = computeSegmentSha256(segBytes);
-
-    segments.push({
-      index: i,
-      durationUnits: Number(UNITS_PER_SEG),
-      costUSDC: (UNITS_PER_SEG * UNIT_PRICE).toString(),
-      cumulativeUnits: cumulativeUnits.toString(),
-      contentIdHash,
-      segmentSha256,
-      byteLength: segBytes.length,
-    });
+function loadFixtureMediaSegments(streamId) {
+  const candidateDirs = [
+    path.join(__dirname, '../access-service/media', streamId),
+    path.join(__dirname, '../fixtures/media'),
+  ];
+  let mediaDir = '';
+  for (const d of candidateDirs) {
+    if (fs.existsSync(d)) {
+      mediaDir = d;
+      break;
+    }
   }
+  if (!mediaDir) {
+    throw new Error(`Media directory not found for stream ${streamId}`);
+  }
+  const files = fs.readdirSync(mediaDir)
+    .filter(f => /^segment_\d+\.ts$/i.test(f))
+    .sort((a, b) => {
+      const idxA = parseInt(a.match(/\d+/)[0], 10);
+      const idxB = parseInt(b.match(/\d+/)[0], 10);
+      return idxA - idxB;
+    });
 
-  // Canonical StreamPaySegmentLeaf calculation matching contract specification
-  const leaves = segments.map((s) =>
-    keccak256(
+  return files.map((filename, i) => {
+    const buf = fs.readFileSync(path.join(mediaDir, filename));
+    return {
+      index: i,
+      filename,
+      bytes: buf,
+      sha256: computeSegmentSha256(buf),
+    };
+  });
+}
+
+function generateManifest(streamId) {
+  const rawSegments = loadFixtureMediaSegments(streamId);
+  const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
+  const zeroHash = '0x' + '00'.repeat(32);
+  let cumulativeUnits = 0n;
+
+  // 1. Compute leaves
+  const leaves = rawSegments.map((s) => {
+    return keccak256(
       encodeAbiParameters(
         parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
         [
           SEGMENT_LEAF_TYPEHASH,
           1,
-          s.contentIdHash,
+          contentIdHash,
           s.index,
-          s.durationUnits,
-          zeroRendition,
-          s.segmentSha256,
+          DURATION_UNITS,
+          zeroHash,
+          s.sha256,
         ]
       )
-    )
-  );
+    );
+  });
 
-  let currentLayer = [...leaves];
-  const treeLayers = [currentLayer];
+  // 2. Build Merkle tree & root
+  const treeLayers = buildMerkleTree(leaves);
+  const manifestRoot = treeLayers[treeLayers.length - 1][0];
 
-  while (currentLayer.length > 1) {
-    const nextLayer = [];
-    for (let i = 0; i < currentLayer.length; i += 2) {
-      if (i + 1 < currentLayer.length) {
-        nextLayer.push(hashPair(currentLayer[i], currentLayer[i + 1]));
-      } else {
-        nextLayer.push(hashPair(currentLayer[i], currentLayer[i]));
-      }
-    }
-    treeLayers.push(nextLayer);
-    currentLayer = nextLayer;
-  }
-
-  const merkleRoot = treeLayers[treeLayers.length - 1][0];
+  // 3. Assemble canonical segment entries with explicit proofs
+  const segments = rawSegments.map((s) => {
+    cumulativeUnits += BigInt(DURATION_UNITS);
+    const proof = getMerkleProof(treeLayers, s.index);
+    return {
+      segmentIndex: s.index,
+      durationUnits: DURATION_UNITS,
+      costUSDC: (BigInt(DURATION_UNITS) * UNIT_PRICE).toString(),
+      cumulativeUnits: cumulativeUnits.toString(),
+      contentIdHash,
+      renditionIdHash: zeroHash,
+      segmentSha256: s.sha256,
+      byteLength: s.bytes.length,
+      merkleProof: proof,
+    };
+  });
 
   return {
+    schemaVersion: 1,
     streamId,
     title: `StreamPay Stream ${streamId}`,
-    totalSegments: segmentCount,
-    totalDurationSec: segmentCount * Number(UNITS_PER_SEG),
+    totalSegments: segments.length,
+    totalDurationSec: segments.length * DURATION_UNITS,
     unitPriceUSDC: '0.0005',
     unitPrice: UNIT_PRICE.toString(),
-    merkleRoot,
+    contentIdHash,
+    pricingPolicyHash: zeroHash,
+    renditionIdHash: zeroHash,
+    manifestRoot,
+    merkleRoot: manifestRoot,
     segments,
   };
 }
 
-const manifest = generateManifest('monad-keynote-hd', 20, 2);
+const manifest = generateManifest('monad-keynote-hd');
 const outPath = path.join(__dirname, '../manifests/demo_stream.json');
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2));
 
-console.log(`✅ Generated manifest written to ${outPath}`);
-console.log(`Merkle Root: ${manifest.merkleRoot}`);
+console.log(`✅ Generated canonical manifest written to ${outPath}`);
+console.log(`Manifest Root: ${manifest.manifestRoot}`);
 console.log(`Unit Price: ${manifest.unitPriceUSDC} USDC/unit (${UNIT_PRICE} base units)`);
-console.log(`Segments: ${manifest.totalSegments} (SHA-256 of real generated bytes)`);
+console.log(`Segments: ${manifest.totalSegments} (real HLS fixture bytes)`);

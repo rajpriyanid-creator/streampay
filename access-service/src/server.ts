@@ -3,8 +3,17 @@ import cors from 'cors';
 import { type Hex } from 'viem';
 import { config } from './config';
 import { checkSessionState, readSession, SESSION_STATUS, getChainId, initChain } from './chain';
-import { getManifest, getMerkleProof, getSegment, getSegmentBytes, getStreamIdList, UNIT_PRICE, UNITS_PER_SEGMENT } from './manifest';
+import {
+  getManifest,
+  getMerkleProof,
+  getSegment,
+  getSegmentBytes,
+  getStreamIdList,
+  UNIT_PRICE,
+  UNITS_PER_SEGMENT,
+} from './manifest';
 import { mintAccessToken, consumeAccessToken } from './tokens';
+import { reservationLedger, SessionLimits } from './reservationStore';
 import {
   verifyVoucherSignature,
   updateSessionVoucher,
@@ -21,12 +30,10 @@ app.use(express.json());
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const adminToken = config.adminToken;
   if (!adminToken) {
-    // If no ADMIN_TOKEN configured, reject all admin requests in non-local mode
     if (config.NETWORK !== 'local') {
       res.status(401).json({ code: 'UNAUTHORIZED', error: 'Admin access not configured' });
       return;
     }
-    // In local mode without ADMIN_TOKEN, allow access
     next();
     return;
   }
@@ -36,98 +43,6 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
     return;
   }
   next();
-}
-
-// ─── Per-Session Credit Reservation Ledger ────────────────────────
-interface SessionReservation {
-  /** Total units reserved (including in-flight) above last checkpoint */
-  reservedUnitsAboveCheckpoint: bigint;
-  /** Number of segments currently in-flight (token issued, not yet consumed/expired) */
-  inFlightSegments: number;
-  /** Last known on-chain settled units */
-  lastCheckpointUnits: bigint;
-  /** Session's offer parameters (cached from on-chain or first request) */
-  maxCreditWindowUnits: bigint;
-  maxCreditSegments: number;
-  maxUnredeemedAmount: bigint;
-  unitPrice: bigint;
-  maxBillableUnits: bigint;
-  deposit: bigint;
-}
-
-const reservationStore = new Map<string, SessionReservation>();
-
-/**
- * Get or initialize a reservation state for a session.
- * Uses contract parameters when available.
- */
-function getOrInitReservation(sessionKey: string, onChainParams?: {
-  maxCreditWindowUnits: bigint;
-  maxCreditSegments: number;
-  maxUnredeemedAmount: bigint;
-  unitPrice: bigint;
-  maxBillableUnits: bigint;
-  deposit: bigint;
-}): SessionReservation {
-  const existing = reservationStore.get(sessionKey);
-  if (existing) return existing;
-
-  const defaults: SessionReservation = {
-    reservedUnitsAboveCheckpoint: 0n,
-    inFlightSegments: 0,
-    lastCheckpointUnits: 0n,
-    maxCreditWindowUnits: onChainParams?.maxCreditWindowUnits ?? 10n,
-    maxCreditSegments: onChainParams?.maxCreditSegments ?? 3,
-    maxUnredeemedAmount: onChainParams?.maxUnredeemedAmount ?? 50000n,
-    unitPrice: onChainParams?.unitPrice ?? UNIT_PRICE,
-    maxBillableUnits: onChainParams?.maxBillableUnits ?? 3600n,
-    deposit: onChainParams?.deposit ?? 5_000_000n,
-  };
-  reservationStore.set(sessionKey, defaults);
-  return defaults;
-}
-
-/**
- * Check if the next reservation would exceed the session's credit/liability caps.
- */
-function canReserveNextSegment(state: SessionReservation, nextCumUnits: bigint): { allowed: boolean; reason?: string } {
-  // Check in-flight segment count
-  if (state.inFlightSegments >= state.maxCreditSegments) {
-    return { allowed: false, reason: `Credit window full: ${state.inFlightSegments}/${state.maxCreditSegments} segments in-flight` };
-  }
-
-  // Check credit window units
-  const unredeemedUnits = nextCumUnits - state.lastCheckpointUnits;
-  if (unredeemedUnits > state.maxCreditWindowUnits) {
-    return { allowed: false, reason: `Unredeemed units (${unredeemedUnits}) would exceed credit window (${state.maxCreditWindowUnits}). Checkpoint required.` };
-  }
-
-  // Check max unredeemed amount (worst-case liability)
-  const unredeemedAmount = unredeemedUnits * state.unitPrice;
-  if (unredeemedAmount > state.maxUnredeemedAmount) {
-    return { allowed: false, reason: `Unredeemed amount (${unredeemedAmount}) would exceed maxUnredeemedAmount (${state.maxUnredeemedAmount}). Checkpoint required.` };
-  }
-
-  // Check max billable units
-  if (nextCumUnits > state.maxBillableUnits) {
-    return { allowed: false, reason: `Cumulative units (${nextCumUnits}) would exceed maxBillableUnits (${state.maxBillableUnits})` };
-  }
-
-  // Check deposit cap
-  const totalCost = nextCumUnits * state.unitPrice;
-  if (totalCost > state.deposit) {
-    return { allowed: false, reason: `Total cost (${totalCost}) would exceed deposit (${state.deposit})` };
-  }
-
-  return { allowed: true };
-}
-
-/** Release an in-flight reservation (on completion, failure, or expiry) */
-function releaseReservation(sessionKey: string): void {
-  const state = reservationStore.get(sessionKey);
-  if (state && state.inFlightSegments > 0) {
-    state.inFlightSegments--;
-  }
 }
 
 // ─── Health Check ────────────────────────────────────────────────
@@ -155,7 +70,7 @@ app.get('/health', async (_req: Request, res: Response) => {
       network: config.NETWORK,
       settlementAddress: config.SETTLEMENT_ADDRESS || 'NOT_SET',
       corsOrigin: config.CORS_ORIGIN,
-      requireOnChainSession: true, // always true now
+      requireOnChainSession: Boolean(config.SETTLEMENT_ADDRESS || config.NETWORK !== 'local'),
     },
     chain: chainState,
     availableStreams: getStreamIdList(),
@@ -166,7 +81,6 @@ app.get('/health', async (_req: Request, res: Response) => {
 app.get('/api/manifest/:streamId', (req: Request, res: Response) => {
   const { streamId } = req.params;
 
-  // Enforce stream allowlist
   const allowedStreams = getStreamIdList();
   if (!allowedStreams.includes(streamId)) {
     res.status(404).json({ code: 'UNKNOWN_STREAM', error: `Stream '${streamId}' not found. Available: ${allowedStreams.join(', ')}` });
@@ -201,6 +115,7 @@ app.get('/api/manifest/:streamId/segment/:index/proof', (req: Request, res: Resp
   res.json({
     segment,
     proof,
+    manifestRoot: manifest.manifestRoot,
     merkleRoot: manifest.merkleRoot,
   });
 });
@@ -224,18 +139,16 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // Validate segment index
     const idx = Number(segmentIndex);
     if (!Number.isInteger(idx) || idx < 0) {
       res.status(400).json({ code: 'INVALID_SEGMENT', error: 'segmentIndex must be a non-negative integer' });
       return;
     }
 
-    // 0. Use SERVER's chain ID and settlement address — not client-supplied values
+    // Server-authoritative network parameters
     const serverChainId = config.NETWORK === 'local' ? 31337 : 10143;
     const serverSettlement = config.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3';
 
-    // Validate client-supplied contract matches server
     if (contractAddress.toLowerCase() !== serverSettlement.toLowerCase()) {
       res.status(400).json({
         code: 'CONTRACT_MISMATCH',
@@ -245,11 +158,18 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // Enforce stream allowlist — never auto-create manifests for unknown streams
+    // Enforce stream allowlist
     const allowedStreams = getStreamIdList();
     const targetStream = streamId || 'monad-keynote-hd';
     if (!allowedStreams.includes(targetStream)) {
       res.status(404).json({ code: 'UNKNOWN_STREAM', error: `Stream '${targetStream}' not in allowlist` });
+      return;
+    }
+
+    const manifest = getManifest(targetStream);
+    const targetSegment = getSegment(targetStream, idx);
+    if (!targetSegment) {
+      res.status(404).json({ code: 'NOT_FOUND', error: `Segment ${idx} not found in stream ${targetStream}` });
       return;
     }
 
@@ -259,14 +179,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       signature: voucher.signature as Hex,
     };
 
-    // 1. Get target segment from manifest
-    const targetSegment = getSegment(targetStream, idx);
-    if (!targetSegment) {
-      res.status(404).json({ code: 'NOT_FOUND', error: `Segment ${segmentIndex} not found in stream ${targetStream}` });
-      return;
-    }
-
-    // 2. Validate payment sufficiency
+    // Validate payment sufficiency against manifest cumulative units
     const requiredUnits = BigInt(targetSegment.cumulativeUnits);
     if (parsedVoucher.cumulativeUnits < requiredUnits) {
       res.status(402).json({
@@ -277,41 +190,98 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. On-chain session verification (ALWAYS required except explicit local unit test)
-    let sessionParams: {
-      maxCreditWindowUnits: bigint;
-      maxCreditSegments: number;
-      maxUnredeemedAmount: bigint;
-      unitPrice: bigint;
-      maxBillableUnits: bigint;
-      deposit: bigint;
-    } | undefined;
+    // On-chain session parameter mapping & verification
+    let sessionLimits: SessionLimits;
+    let onChainSettledUnits: bigint | undefined;
 
     if (config.SETTLEMENT_ADDRESS) {
       const chainCheck = await checkSessionState(sessionId as Hex, sessionSigner as Hex);
-      if (!chainCheck.valid) {
+      if (!chainCheck.valid || !chainCheck.session) {
         res.status(403).json({
-          code: 'SESSION_NOT_FOUND',
+          code: 'SESSION_INVALID',
           error: 'On-chain session validation failed',
           reason: chainCheck.reason,
         });
         return;
       }
-      // Extract actual session terms from on-chain state for reservation enforcement
-      if (chainCheck.session) {
-        const s = chainCheck.session;
-        sessionParams = {
-          maxCreditWindowUnits: BigInt(s.maxBillableUnits > 0 ? Math.min(Number(s.maxBillableUnits), 20) : 10),
-          maxCreditSegments: 3, // from on-chain maxCreditSegments
-          maxUnredeemedAmount: BigInt(s.maxUnredeemedAmount),
-          unitPrice: BigInt(s.unitPrice),
-          maxBillableUnits: BigInt(s.maxBillableUnits),
-          deposit: BigInt(s.initialDeposit),
-        };
+
+      const s = chainCheck.session;
+
+      // Status check
+      if (s.status !== SESSION_STATUS.OPEN) {
+        res.status(403).json({
+          code: 'SESSION_NOT_OPEN',
+          error: `Session is not open on-chain (status=${s.status})`,
+        });
+        return;
       }
+
+      // Recipient check
+      if (recipient && s.recipient.toLowerCase() !== (recipient as string).toLowerCase()) {
+        res.status(400).json({
+          code: 'RECIPIENT_MISMATCH',
+          error: `Recipient mismatch: on-chain ${s.recipient}, request has ${recipient}`,
+        });
+        return;
+      }
+
+      // Strict Stream & Content binding check
+      if (s.contentIdHash.toLowerCase() !== manifest.contentIdHash.toLowerCase()) {
+        res.status(403).json({
+          code: 'CONTENT_MISMATCH',
+          error: `Session contentIdHash (${s.contentIdHash}) does not match stream (${manifest.contentIdHash})`,
+        });
+        return;
+      }
+
+      if (s.manifestRoot.toLowerCase() !== manifest.manifestRoot.toLowerCase()) {
+        res.status(403).json({
+          code: 'MANIFEST_ROOT_MISMATCH',
+          error: `Session manifestRoot (${s.manifestRoot}) does not match stream manifest (${manifest.manifestRoot})`,
+        });
+        return;
+      }
+
+      if (s.unitPrice !== BigInt(manifest.unitPrice)) {
+        res.status(403).json({
+          code: 'UNIT_PRICE_MISMATCH',
+          error: `Session unitPrice (${s.unitPrice}) does not match stream unitPrice (${manifest.unitPrice})`,
+        });
+        return;
+      }
+
+      // Exact on-chain limits
+      sessionLimits = {
+        maxCreditSegments: s.maxCreditSegments,
+        maxCreditWindowUnits: s.maxCreditWindowUnits,
+        maxUnredeemedAmount: s.maxUnredeemedAmount,
+        unitPrice: s.unitPrice,
+        maxBillableUnits: s.maxBillableUnits,
+        deposit: s.initialDeposit,
+      };
+      onChainSettledUnits = s.settledUnits;
+    } else {
+      // Non-local mode without settlement address must fail closed
+      if (config.NETWORK !== 'local') {
+        res.status(500).json({
+          code: 'CONFIGURATION_ERROR',
+          error: 'SETTLEMENT_ADDRESS required in non-local mode',
+        });
+        return;
+      }
+
+      // Local permissive fallback
+      sessionLimits = {
+        maxCreditSegments: 3,
+        maxCreditWindowUnits: 10n,
+        maxUnredeemedAmount: 50000n,
+        unitPrice: UNIT_PRICE,
+        maxBillableUnits: 3600n,
+        deposit: 5_000_000n,
+      };
     }
 
-    // 4. Verify EIP-712 Voucher signature — use SERVER's chain ID, not client-supplied
+    // Verify EIP-712 Voucher signature
     const isValidSig = await verifyVoucherSignature(
       parsedVoucher,
       sessionSigner as Hex,
@@ -324,11 +294,23 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 5. Enforce Credit Window & Reservation BEFORE updating voucher store
+    // Generate candidate access token
+    const candidateToken = mintAccessToken(sessionId as Hex, targetStream, idx);
+    const tokenSig = candidateToken.split('.')[1];
     const sessKey = (sessionId as string).toLowerCase();
-    const resState = getOrInitReservation(sessKey, sessionParams);
 
-    const reserveCheck = canReserveNextSegment(resState, parsedVoucher.cumulativeUnits);
+    // Check & apply credit reservation in the concurrency-safe ledger
+    const reserveCheck = await reservationLedger.checkAndReserve(
+      sessKey,
+      sessionLimits,
+      idx,
+      parsedVoucher.cumulativeUnits,
+      candidateToken,
+      tokenSig,
+      config.tokenTtlSec,
+      onChainSettledUnits
+    );
+
     if (!reserveCheck.allowed) {
       res.status(402).json({
         code: 'CREDIT_LIMIT_EXCEEDED',
@@ -338,28 +320,32 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       return;
     }
 
-    // 6. Update off-chain voucher store (enforces session identity binding + monotonicity)
-    // Only do this AFTER reservation is approved
-    const updateResult = updateSessionVoucher(
-      sessionId as Hex,
-      sessionSigner as Hex,
-      recipient as Hex,
-      serverSettlement as Hex,
-      serverChainId,
-      parsedVoucher
-    );
+    // If duplicate idempotent request, return the existing active token
+    const segmentToken = reserveCheck.isDuplicate && reserveCheck.existingToken
+      ? reserveCheck.existingToken
+      : candidateToken;
 
-    if (!updateResult.success) {
-      res.status(400).json({ code: 'VOUCHER_REJECTED', error: 'Voucher update rejected', reason: updateResult.reason });
-      return;
+    if (!reserveCheck.isDuplicate) {
+      // Update off-chain voucher store
+      const updateResult = updateSessionVoucher(
+        sessionId as Hex,
+        sessionSigner as Hex,
+        recipient as Hex,
+        serverSettlement as Hex,
+        serverChainId,
+        parsedVoucher
+      );
+
+      if (!updateResult.success) {
+        await reservationLedger.onDeliveryFailed(sessKey, tokenSig);
+        res.status(400).json({
+          code: 'VOUCHER_REJECTED',
+          error: 'Voucher update rejected',
+          reason: updateResult.reason,
+        });
+        return;
+      }
     }
-
-    // 7. Reserve the segment
-    resState.inFlightSegments++;
-    resState.reservedUnitsAboveCheckpoint = parsedVoucher.cumulativeUnits - resState.lastCheckpointUnits;
-
-    // 8. Issue single-use timed access token
-    const segmentToken = mintAccessToken(sessionId as Hex, targetStream, idx);
 
     res.json({
       success: true,
@@ -367,7 +353,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      contentUrl: `/api/access/content/${targetStream}/segment_${idx}.ts?token=${segmentToken}`,
+      contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/segment_${idx}.ts?token=${encodeURIComponent(segmentToken)}`,
     });
   } catch (err: any) {
     console.error('Error processing gated segment request:', err);
@@ -376,7 +362,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 });
 
 // ─── Gated Content Segment Delivery Route with Token Validation ────
-app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Response) => {
+app.get('/api/access/content/:streamId/:segmentFile', async (req: Request, res: Response) => {
   const { streamId, segmentFile } = req.params;
   const { token } = req.query;
 
@@ -385,7 +371,6 @@ app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Respon
     return;
   }
 
-  // Parse segment index from filename — reject invalid filenames
   const match = segmentFile.match(/^segment_(\d+)\.ts$/);
   if (!match) {
     res.status(400).json({ code: 'INVALID_SEGMENT_FILE', error: `Invalid segment filename: ${segmentFile}` });
@@ -393,24 +378,68 @@ app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Respon
   }
   const segmentIndex = parseInt(match[1], 10);
 
-  // Validate token FIRST (verify HMAC, expiry, stream binding) — do NOT consume yet
-  // Then check route binding — only consume if everything matches
+  // Consume token: verifies HMAC, expiry, streamId, and segment index
   const consumption = consumeAccessToken(token, streamId, segmentIndex);
   if (!consumption.valid || !consumption.record) {
     res.status(403).json({ code: 'FORBIDDEN', error: 'Forbidden', reason: consumption.reason });
     return;
   }
 
-  // Release the in-flight reservation for this session
+  const tokenSig = token.split('.')[1];
   const sessKey = (consumption.record.sid as string).toLowerCase();
-  releaseReservation(sessKey);
 
-  // Serve the exact bytes whose SHA-256 matches the manifest entry
-  const segmentData = getSegmentBytes(streamId, segmentIndex);
+  // Mark token consumed in reservation ledger
+  await reservationLedger.onTokenConsumed(sessKey, tokenSig);
+
+  // Read binary segment bytes whose SHA-256 matches manifest entry
+  let segmentData: Buffer;
+  try {
+    segmentData = getSegmentBytes(streamId, segmentIndex);
+  } catch (err: any) {
+    await reservationLedger.onDeliveryFailed(sessKey, tokenSig);
+    res.status(404).json({ code: 'SEGMENT_FILE_NOT_FOUND', error: err.message });
+    return;
+  }
+
+  // Delivery tracking: release / complete reservation on actual HTTP stream outcome
+  res.on('finish', () => {
+    reservationLedger.onDeliveryCompleted(sessKey, tokenSig, segmentIndex);
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      reservationLedger.onDeliveryFailed(sessKey, tokenSig);
+    }
+  });
+  res.on('error', () => {
+    reservationLedger.onDeliveryFailed(sessKey, tokenSig);
+  });
+
   res.setHeader('Content-Type', 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store, private');
   res.setHeader('Content-Length', segmentData.length.toString());
   res.send(segmentData);
+});
+
+// ─── Checkpoint Notification / Sync Route ─────────────────────────
+app.post('/api/session/checkpoint-sync', async (req: Request, res: Response) => {
+  const { sessionId } = req.body;
+  if (!sessionId) {
+    res.status(400).json({ error: 'Missing sessionId' });
+    return;
+  }
+  try {
+    if (config.SETTLEMENT_ADDRESS) {
+      const s = await readSession(sessionId as Hex);
+      if (s) {
+        await reservationLedger.onCheckpoint(sessionId, s.settledUnits);
+        res.json({ success: true, settledUnits: s.settledUnits.toString() });
+        return;
+      }
+    }
+    res.status(404).json({ error: 'Session not found' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── HLS Master Playlist Provider Route ───────────────────────────
@@ -483,8 +512,16 @@ app.listen(config.PORT, async () => {
       console.log(`🔗 Connected to chain ${cid}`);
     } catch (e: any) {
       console.error(`⛔ Chain init error: ${e.message}`);
+      if (config.NETWORK !== 'local') {
+        console.error('Fatal: Non-local chain initialization failed. Exiting.');
+        process.exit(1);
+      }
     }
   } else {
+    if (config.NETWORK !== 'local') {
+      console.error('Fatal: SETTLEMENT_ADDRESS missing in non-local mode. Exiting.');
+      process.exit(1);
+    }
     console.log(`⚠️  SETTLEMENT_ADDRESS not set — running in permissive local mode`);
   }
   console.log(`📋 Allowed streams: ${getStreamIdList().join(', ')}`);

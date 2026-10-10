@@ -209,16 +209,31 @@ export async function openSession(p: {
 
 // ─── signVoucher ────────────────────────────────────────────────
 export async function signVoucher(p: {
-  rpc: string; settlement: Address; signerKey: Hex;
-  sessionId: Hex; cumulativeUnits: bigint;
+  rpc?: string; settlement: Address; signerKey: Hex;
+  sessionId: Hex; cumulativeUnits: bigint; chainId?: number;
 }): Promise<Hex> {
-  const pc = pub(p.rpc);
   const account = privateKeyToAccount(p.signerKey);
-  const digest = await pc.readContract({
-    address: p.settlement, abi: hashVoucherAbi, functionName: 'hashVoucher',
-    args: [{ sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }],
-  }) as Hex;
-  return account.sign({ hash: digest });
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(p.chainId || 31337),
+    verifyingContract: p.settlement,
+  };
+  const types = {
+    Voucher: [
+      { name: 'sessionId', type: 'bytes32' },
+      { name: 'cumulativeUnits', type: 'uint64' },
+    ],
+  };
+  return account.signTypedData({
+    domain,
+    types,
+    primaryType: 'Voucher',
+    message: {
+      sessionId: p.sessionId,
+      cumulativeUnits: p.cumulativeUnits,
+    },
+  });
 }
 
 // ─── checkpoint ─────────────────────────────────────────────────

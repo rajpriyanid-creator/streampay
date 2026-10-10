@@ -130,15 +130,26 @@ export const SEGMENT_LEAF_TYPE_STRING =
 export interface SegmentManifestEntry {
   segmentIndex: number;
   durationUnits: number;
+  costUSDC?: string;
+  cumulativeUnits?: string;
+  contentIdHash?: string;
+  renditionIdHash?: string;
   segmentSha256: string;
-  renditionIdHash: string;
+  byteLength?: number;
   merkleProof: string[];
 }
 
 export interface SegmentManifest {
   schemaVersion: number;
+  streamId?: string;
+  title?: string;
+  totalSegments?: number;
+  totalDurationSec?: number;
+  unitPriceUSDC?: string;
+  unitPrice?: string;
   contentIdHash: string;
   manifestRoot: string;
+  merkleRoot?: string;
   pricingPolicyHash: string;
   renditionIdHash: string;
   segments: SegmentManifestEntry[];
