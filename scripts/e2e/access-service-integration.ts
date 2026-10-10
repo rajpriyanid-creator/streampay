@@ -404,7 +404,7 @@ async function main() {
     recipient,
     manifestRoot: manifest.manifestRoot as Hex,
     contentIdHash: manifest.contentIdHash as Hex,
-    pricingPolicyHash: CANONICAL_PRICING_POLICY_HASH,
+    pricingPolicyHash: manifest.pricingPolicyHash as Hex,
     unitPrice,
     maxBillable: 3600n,
     deposit,
