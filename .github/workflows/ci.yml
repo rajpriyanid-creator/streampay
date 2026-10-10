@@ -72,12 +72,20 @@ jobs:
       - name: Build Smart Contracts
         run: |
           cd contracts
-          forge build
+          forge build || {
+            ERR=$(forge build 2>&1)
+            echo "::error::Forge build failed: $ERR"
+            exit 1
+          }
 
       - name: Test Smart Contracts
         run: |
           cd contracts
-          forge test -vvv
+          forge test -vvv || {
+            ERR=$(forge test -vvv 2>&1 | tail -n 50)
+            echo "::error::Forge test failed: $ERR"
+            exit 1
+          }
 
       # Local Chain Lifecycle Test
       - name: Run Local Chain Lifecycle Test
