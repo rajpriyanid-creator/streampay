@@ -1,11 +1,12 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** Fix authoritative session binding, credit ledger, Merkle proofs & real HLS playback  
-**Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent)  
+**Commit:** `43f8d70fc47028009d2b7ff9229ffbe946008cff`  
+**GitHub Actions Run:** [Run #38065915369](https://github.com/rajpriyanid-creator/streampay/actions/runs/38065915369) (Conclusion: **SUCCESS**)  
+**Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
 > **Honesty note:** Only results that have been independently executed and observed are marked PASS.  
-> Unexecuted checks (e.g. Foundry on Windows, live Testnet deployment) are explicitly documented as unrun.
+> Unexecuted checks (e.g. live Testnet deployment) are explicitly documented as unrun / NOT DEPLOYED.
 
 ---
 
@@ -183,9 +184,9 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 
 ## 5. Explicit List of Unrun Tests
 
-1. **Foundry tests on Windows**: `forge` is not installed on this local Windows environment. The contract test suite (37 tests) is executed in the Linux CI workflow (`.github/workflows/ci.yml`).
-2. **Monad Testnet Deployment**: No live testnet deployment was executed. Testnet faucet, token addresses, and contract deployment to chain 10143 remain blocked.
-3. **Envio HyperIndex toolchain**: Envio CLI was not executed locally; it is isolated in a visibly separate CI job.
+1. **Foundry tests on local Windows**: `forge` is not installed on this local Windows machine. The full Foundry test suite (39 tests across 2 test suites: `DeployDiscoveryTest` and `StreamPaySettlementTest`) is executed and passed in the Linux CI workflow (`.github/workflows/ci.yml`).
+2. **Monad Testnet Deployment**: No live testnet deployment was executed. Testnet faucet, token addresses, and contract deployment to chain 10143 remain blocked (**NOT DEPLOYED**).
+3. **Envio HyperIndex toolchain build**: Envio CLI was verified via CLI availability check (`npx envio --version`), but full indexer build was not executed since indexer runs on chain 31337 and requires Docker/WSL 2.
 
 ---
 
