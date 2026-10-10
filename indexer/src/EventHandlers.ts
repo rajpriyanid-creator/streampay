@@ -1,9 +1,8 @@
 /**
  * StreamPay v2.5 Envio Event Handlers
- * Maps StreamPaySettlement contract events to indexer entities.
+ * Maps all 8 StreamPaySettlement contract events to indexer entities.
  */
 
-// Placeholder handler implementations matching Envio contract event signatures
 export const handleStreamOpened = async ({ event, context }: any) => {
   const sessionId = event.params.sessionId;
   context.StreamSession.set({
@@ -22,6 +21,26 @@ export const handleStreamOpened = async ({ event, context }: any) => {
     openedAtBlock: BigInt(event.block.number),
     openedAtTimestamp: BigInt(event.block.timestamp),
   });
+};
+
+export const handleStreamPolicyBound = async ({ event, context }: any) => {
+  const sessionId = event.params.sessionId;
+  const current = await context.StreamSession.get(sessionId);
+  if (current) {
+    context.StreamSession.set({
+      ...current,
+      contentIdHash: event.params.contentIdHash,
+      pricingPolicyHash: event.params.pricingPolicyHash,
+      manifestRoot: event.params.manifestRoot,
+      unitPrice: event.params.unitPrice,
+      maxBillableUnits: event.params.maxBillableUnits,
+      maxLeadUnits: event.params.maxLeadUnits,
+      maxCreditSegments: event.params.maxCreditSegments,
+      maxCreditWindowUnits: event.params.maxCreditWindowUnits,
+      maxUnredeemedAmount: event.params.maxUnredeemedAmount,
+      offerExpiresAt: event.params.offerExpiresAt,
+    });
+  }
 };
 
 export const handleStreamCheckpointed = async ({ event, context }: any) => {
@@ -47,6 +66,19 @@ export const handleStreamCheckpointed = async ({ event, context }: any) => {
   });
 };
 
+export const handleCloseRequested = async ({ event, context }: any) => {
+  const sessionId = event.params.sessionId;
+  const current = await context.StreamSession.get(sessionId);
+  if (current) {
+    context.StreamSession.set({
+      ...current,
+      status: 'CLOSE_REQUESTED',
+      closeRequestedAt: event.params.closeRequestedAt,
+      challengeEndsAt: event.params.challengeEndsAt,
+    });
+  }
+};
+
 export const handleStreamClosed = async ({ event, context }: any) => {
   const sessionId = event.params.sessionId;
   const current = await context.StreamSession.get(sessionId);
@@ -60,4 +92,45 @@ export const handleStreamClosed = async ({ event, context }: any) => {
       closeReason: reasons[event.params.closeReason] || 'UNKNOWN',
     });
   }
+};
+
+export const handlePayoutCredited = async ({ event, context }: any) => {
+  const key = `${event.params.token}-${event.params.account}`;
+  const current = await context.ClaimableCredit.get(key);
+  const prevAmount = current ? current.amount : 0n;
+  context.ClaimableCredit.set({
+    id: key,
+    token: event.params.token,
+    account: event.params.account,
+    amount: prevAmount + event.params.amount,
+    lastUpdated: BigInt(event.block.timestamp),
+  });
+};
+
+export const handleClaimed = async ({ event, context }: any) => {
+  const key = `${event.params.token}-${event.params.account}`;
+  context.ClaimableCredit.set({
+    id: key,
+    token: event.params.token,
+    account: event.params.account,
+    amount: 0n,
+    lastUpdated: BigInt(event.block.timestamp),
+  });
+
+  context.Claim.set({
+    id: `${event.params.token}-${event.params.account}-${event.transaction.hash}-${event.logIndex}`,
+    token: event.params.token,
+    account: event.params.account,
+    amount: event.params.amount,
+    blockNumber: BigInt(event.block.number),
+    blockTimestamp: BigInt(event.block.timestamp),
+  });
+};
+
+export const handlePaused = async ({ event, context }: any) => {
+  // Handled for admin audit logs
+};
+
+export const handleUnpaused = async ({ event, context }: any) => {
+  // Handled for admin audit logs
 };

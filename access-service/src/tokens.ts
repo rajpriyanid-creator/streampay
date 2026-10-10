@@ -4,7 +4,12 @@ import { config } from './config';
 
 const SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
 
-export interface TokenPayload { sid: string; stream: string; idx: number; exp: number }
+export interface TokenPayload {
+  sid: string;
+  stream: string;
+  idx: number;
+  exp: number;
+}
 
 const b64u = (b: Buffer) => b.toString('base64url');
 
@@ -15,10 +20,10 @@ export function issueToken(p: Omit<TokenPayload, 'exp'>): string {
   return `${body}.${sig}`;
 }
 
-export function mintAccessToken(sessionId: Hex, segmentIndex: number): string {
+export function mintAccessToken(sessionId: Hex, streamId: string, segmentIndex: number): string {
   return issueToken({
     sid: sessionId,
-    stream: 'demo-stream',
+    stream: streamId,
     idx: segmentIndex,
   });
 }
@@ -45,16 +50,23 @@ export function verifyToken(token: string, consume = false): TokenPayload | null
   } catch { return null; }
 }
 
-export function consumeAccessToken(token: string): { valid: boolean; reason?: string; record?: { sessionId: string; segmentIndex: number } } {
+export function consumeAccessToken(
+  token: string,
+  expectedStreamId: string,
+  expectedSegmentIndex: number
+): { valid: boolean; reason?: string; record?: TokenPayload } {
   const payload = verifyToken(token, true);
   if (!payload) {
     return { valid: false, reason: 'Invalid, expired, or already consumed access token' };
   }
+  if (payload.stream !== expectedStreamId) {
+    return { valid: false, reason: `Stream ID mismatch: token authorized for ${payload.stream}, got ${expectedStreamId}` };
+  }
+  if (payload.idx !== expectedSegmentIndex) {
+    return { valid: false, reason: `Segment index mismatch: token authorized for ${payload.idx}, got ${expectedSegmentIndex}` };
+  }
   return {
     valid: true,
-    record: {
-      sessionId: payload.sid,
-      segmentIndex: payload.idx,
-    },
+    record: payload,
   };
 }

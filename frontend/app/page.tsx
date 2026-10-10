@@ -6,16 +6,13 @@ import {
   createPublicClient,
   custom,
   http,
-  keccak256,
-  encodeAbiParameters,
-  parseAbiParameters,
   type Hex,
   type Address,
 } from 'viem';
 import { monadTestnet } from '../lib/account/chains';
-import { getStreamPayDomain, VOUCHER_TYPES, CONTENT_OFFER_TYPES, SESSION_CONFIG_TYPES } from '../lib/protocol/typedData';
 import { formatUsdc, parseUsdc } from '../lib/protocol/money';
-import { deriveContractSessionId, verifyContractDeployed } from '../lib/protocol/contractClient';
+import { verifyContractDeployed } from '../lib/protocol/contractClient';
+import { openSession, signVoucher, checkpoint, closeCooperative } from '../lib/protocol/lifecycle';
 
 // Network manifests
 import localManifest from '../../manifests/local.json';
@@ -48,7 +45,7 @@ interface VoucherLog {
 
 export default function StreamPayDashboard() {
   // Network Selection State
-  const [networkMode, setNetworkMode] = useState<'LOCAL' | 'TESTNET'>('TESTNET');
+  const [networkMode, setNetworkMode] = useState<'LOCAL' | 'TESTNET'>('LOCAL');
   const activeManifest = networkMode === 'TESTNET' ? testnetManifest : localManifest;
 
   // Account State
@@ -82,10 +79,10 @@ export default function StreamPayDashboard() {
 
   // Playback closure ref
   const playbackRef = useRef({
-    currentSegment: 0,
-    cumulativeUnits: 0n,
-    session: null as StreamSessionState | null,
-    isStreaming: false,
+    currentSegment,
+    cumulativeUnits,
+    session,
+    isStreaming,
   });
 
   const streamIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -115,7 +112,7 @@ export default function StreamPayDashboard() {
       }
     } else {
       setIsWalletConnected(true);
-      setStatusMsg({ text: 'Using Dev Account (Injected Ethereum Wallet not detected)', type: 'info' });
+      setStatusMsg({ text: 'Using Anvil Dev Keys (Local Network)', type: 'info' });
     }
   };
 
@@ -183,92 +180,38 @@ export default function StreamPayDashboard() {
   // ─── Open Session Transaction (v2.5 Contract) ──────────────────
   const handleOpenSession = async () => {
     try {
-      setStatusMsg({ text: 'Constructing EIP-712 ContentOffer & SessionConfig...', type: 'info' });
+      setStatusMsg({ text: 'Executing real openWithSignature transaction on-chain...', type: 'info' });
 
       const depositUnits = parseUsdc(escrowDeposit);
       const durationSec = durationHours * 3600;
       const openedAt = Math.floor(Date.now() / 1000);
-      const validUntil = openedAt + durationSec;
-      const expiresAt = openedAt + 86400; // 24h offer expiry
 
-      // 1. ContentOffer EIP-712 struct
-      const contentOffer = {
+      const res = await openSession({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        token: (activeManifest.paymentToken.address || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Address,
+        creatorKey: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+        payerKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+        signerKey: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
         recipient: recipientAddress,
-        token: (activeManifest.paymentToken.address || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Hex,
-        contentIdHash: keccak256(Buffer.from(`stream-content-${selectedStream}`)) as Hex,
-        pricingPolicyHash: keccak256(Buffer.from('fixed-rate-0.01-usdc-per-unit')) as Hex,
+        manifestRoot: manifestData?.merkleRoot || ('0x' + '00'.repeat(32) as Hex),
         unitPrice: parseUsdc('0.01'),
-        maxBillableUnits: 86400n,
-        manifestRoot: (manifestData?.merkleRoot || '0x0000000000000000000000000000000000000000000000000000000000000000') as Hex,
-        maxCreditSegments: 5,
-        maxCreditWindowUnits: 12n,
-        maxUnredeemedAmount: parseUsdc('1.00'),
-        offerNonce: BigInt(Date.now()),
-        issuedAt: BigInt(openedAt),
-        expiresAt: BigInt(expiresAt),
-      };
+        maxBillable: 3600n,
+        deposit: depositUnits,
+        validSec: durationSec,
+        graceSec: 3600,
+        maxLead: 12n,
+        maxCreditWindow: 12n,
+        maxCreditSegments: 3,
+        maxUnredeemedAmount: parseUsdc('0.10'),
+      });
 
-      // Calculate offerDigest matching contract
-      const offerDigest = keccak256(
-        encodeAbiParameters(
-          parseAbiParameters('address, address, bytes32, bytes32, uint256, uint64, bytes32, uint8, uint64, uint256, uint256, uint64, uint64'),
-          [
-            contentOffer.recipient,
-            contentOffer.token,
-            contentOffer.contentIdHash,
-            contentOffer.pricingPolicyHash,
-            contentOffer.unitPrice,
-            contentOffer.maxBillableUnits,
-            contentOffer.manifestRoot,
-            contentOffer.maxCreditSegments,
-            contentOffer.maxCreditWindowUnits,
-            contentOffer.maxUnredeemedAmount,
-            contentOffer.offerNonce,
-            contentOffer.issuedAt,
-            contentOffer.expiresAt,
-          ]
-        )
-      );
-
-      // 2. SessionConfig EIP-712 struct
-      const sessionConfig = {
-        payer: payerAddress,
-        sessionSigner: sessionSignerAddress,
-        offerDigest,
-        initialDeposit: depositUnits,
-        maxLeadUnits: 12n,
-        validUntil: BigInt(validUntil),
-        redemptionGraceSeconds: 3600n,
-        nonce: BigInt(Date.now() + 1),
-      };
-
-      const configDigest = keccak256(
-        encodeAbiParameters(
-          parseAbiParameters('address, address, bytes32, uint256, uint64, uint64, uint64, uint256'),
-          [
-            sessionConfig.payer,
-            sessionConfig.sessionSigner,
-            sessionConfig.offerDigest,
-            sessionConfig.initialDeposit,
-            sessionConfig.maxLeadUnits,
-            sessionConfig.validUntil,
-            sessionConfig.redemptionGraceSeconds,
-            sessionConfig.nonce,
-          ]
-        )
-      );
-
-      // 3. Derive exact contract sessionId
-      const sessionId = deriveContractSessionId(configDigest, offerDigest);
-
-      // Simulated transaction hash for demo execution
-      const txHash = keccak256(Buffer.from(`tx-open-${sessionId}-${Date.now()}`)) as Hex;
-      setLastTxHash(txHash);
+      setLastTxHash(res.txHash);
 
       const newSession: StreamSessionState = {
-        sessionId,
+        sessionId: res.sessionId,
         payer: payerAddress,
-        sessionSigner: sessionSignerAddress,
+        sessionSigner: res.signerAddress,
         recipient: recipientAddress,
         depositAmount: depositUnits,
         maxDurationSec: durationSec,
@@ -276,7 +219,7 @@ export default function StreamPayDashboard() {
         settledAmount: 0n,
         highestCumulativeUnits: 0n,
         status: 'OPEN',
-        txHash,
+        txHash: res.txHash,
       };
 
       setSession(newSession);
@@ -285,7 +228,7 @@ export default function StreamPayDashboard() {
       setVoucherLogs([]);
 
       setStatusMsg({
-        text: `Session Opened On-Chain! Session ID: ${sessionId.slice(0, 10)}... Tx: ${txHash.slice(0, 10)}...`,
+        text: `Session Opened On-Chain! Session ID: ${res.sessionId.slice(0, 10)}... Tx: ${res.txHash.slice(0, 10)}...`,
         type: 'success',
       });
     } catch (err: any) {
@@ -316,12 +259,14 @@ export default function StreamPayDashboard() {
     }
 
     try {
-      // EIP-712 Voucher Signature
-      const sigPayload = encodeAbiParameters(
-        parseAbiParameters('bytes32, uint64'),
-        [activeSession.sessionId!, nextCumUnits]
-      );
-      const signature = keccak256(sigPayload);
+      // EIP-712 Voucher Signature matching contract domain & struct
+      const signature = await signVoucher({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        signerKey: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+        sessionId: activeSession.sessionId!,
+        cumulativeUnits: nextCumUnits,
+      });
 
       // Submit to Access Service Gate
       const gateRes = await fetch(`${ACCESS_SERVICE_URL}/api/access/segment`, {
@@ -360,9 +305,8 @@ export default function StreamPayDashboard() {
 
         setVoucherLogs((prev) => [newLog, ...prev.slice(0, 19)]);
       } else {
-        // FAIL CLOSED
         handlePauseStream();
-        setStatusMsg({ text: `Access Gate Rejected Voucher: ${gateData.error || 'Unauthorized'}`, type: 'error' });
+        setStatusMsg({ text: `Access Gate Rejected Voucher: ${gateData.error || gateData.reason || 'Unauthorized'}`, type: 'error' });
       }
     } catch (e: any) {
       handlePauseStream();
@@ -394,12 +338,28 @@ export default function StreamPayDashboard() {
   const handleCheckpointOnChain = async () => {
     if (!session || cumulativeUnits === 0n) return;
     try {
-      setStatusMsg({ text: 'Submitting checkpoint transaction to Monad contract...', type: 'info' });
+      setStatusMsg({ text: 'Submitting real checkpoint transaction to Monad contract...', type: 'info' });
 
-      const txHash = keccak256(Buffer.from(`tx-checkpoint-${session.sessionId}-${cumulativeUnits}-${Date.now()}`)) as Hex;
+      const lastSig = voucherLogs[0]?.signature || (await signVoucher({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        signerKey: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+        sessionId: session.sessionId!,
+        cumulativeUnits,
+      }));
+
+      const txHash = await checkpoint({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        anyKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+        sessionId: session.sessionId!,
+        cumulativeUnits,
+        voucherSig: lastSig,
+      });
+
       setLastTxHash(txHash);
-
       const totalSpent = cumulativeUnits * parseUsdc('0.01');
+
       setSession((prev) =>
         prev
           ? {
@@ -428,9 +388,26 @@ export default function StreamPayDashboard() {
     if (!session) return;
     try {
       handlePauseStream();
-      setStatusMsg({ text: 'Submitting closeCooperative transaction on-chain...', type: 'info' });
+      setStatusMsg({ text: 'Submitting real closeCooperative transaction on-chain...', type: 'info' });
 
-      const txHash = keccak256(Buffer.from(`tx-close-${session.sessionId}-${Date.now()}`)) as Hex;
+      const lastSig = voucherLogs[0]?.signature || (await signVoucher({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        signerKey: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+        sessionId: session.sessionId!,
+        cumulativeUnits,
+      }));
+
+      const txHash = await closeCooperative({
+        rpc: activeManifest.rpcHttp,
+        settlement: contractAddress,
+        anyKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+        creatorKey: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+        sessionId: session.sessionId!,
+        cumulativeUnits,
+        voucherSig: lastSig,
+      });
+
       setLastTxHash(txHash);
 
       const totalSpent = cumulativeUnits * parseUsdc('0.01');
@@ -450,357 +427,159 @@ export default function StreamPayDashboard() {
   const remainingBalance = session ? session.depositAmount - totalSpentUSDC : 0n;
 
   return (
-    <div className="min-h-screen bg-[#0A0D14] text-slate-100 flex flex-col font-sans">
-      {/* ─── Top Header ────────────────────────────────────────────── */}
-      <header className="border-b border-slate-800 bg-[#0F1420]/80 backdrop-blur-md px-6 py-4 flex items-center justify-between sticky top-0 z-50">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 via-purple-500 to-indigo-400 flex items-center justify-center font-bold text-white shadow-lg shadow-purple-500/20">
-              ⚡
-            </div>
-            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-indigo-200">
-              StreamPay v2.5
-            </span>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <select
-              value={networkMode}
-              onChange={(e) => setNetworkMode(e.target.value as any)}
-              className="bg-slate-900 border border-slate-700 text-violet-300 text-xs rounded-lg px-2.5 py-1 font-medium outline-none"
-            >
-              <option value="TESTNET">Monad Testnet (10143)</option>
-              <option value="LOCAL">Local Anvil (31337)</option>
-            </select>
-          </div>
+    <main style={{ minHeight: '100vh', background: '#0a0d14', color: '#f3f4f6', fontFamily: 'sans-serif', padding: '24px' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div>
+          <h1 style={{ fontSize: '28px', fontWeight: 'bold', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            StreamPay v2.5
+          </h1>
+          <p style={{ color: '#9ca3af', fontSize: '14px' }}>Monad Pay-Per-Use Video Streaming Platform</p>
         </div>
 
-        <div className="flex items-center space-x-4">
-          {!isWalletConnected ? (
-            <button
-              onClick={handleConnectWallet}
-              className="py-1.5 px-4 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-medium text-xs transition-all shadow-md shadow-violet-600/20"
-            >
-              Connect Wallet
-            </button>
-          ) : (
-            <div className="flex items-center space-x-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-1.5 text-xs">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-slate-400">Payer:</span>
-              <span className="font-mono text-slate-200">{payerAddress.slice(0, 6)}...{payerAddress.slice(-4)}</span>
-            </div>
-          )}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <select
+            value={networkMode}
+            onChange={(e) => setNetworkMode(e.target.value as any)}
+            style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '6px', padding: '8px 12px' }}
+          >
+            <option value="LOCAL">Local Anvil (31337)</option>
+            <option value="TESTNET">Monad Testnet (10143)</option>
+          </select>
+
+          <button
+            onClick={handleConnectWallet}
+            style={{ background: isWalletConnected ? '#059669' : '#4f46e5', color: '#fff', border: 'none', borderRadius: '6px', padding: '8px 16px', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            {isWalletConnected ? `Connected (${payerAddress.slice(0, 6)}...)` : 'Connect Wallet'}
+          </button>
         </div>
       </header>
 
-      {/* ─── Main Workspace ────────────────────────────────────────── */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {statusMsg && (
+        <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '24px', background: statusMsg.type === 'error' ? '#7f1d1d' : statusMsg.type === 'success' ? '#065f46' : statusMsg.type === 'warn' ? '#78350f' : '#1e3a8a' }}>
+          {statusMsg.text}
+        </div>
+      )}
 
-        {/* Status Banner */}
-        {statusMsg && (
-          <div className="lg:col-span-12">
-            <div
-              className={`px-4 py-3 rounded-xl border flex items-center justify-between text-sm ${
-                statusMsg.type === 'success'
-                  ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
-                  : statusMsg.type === 'error'
-                  ? 'bg-rose-950/40 border-rose-500/30 text-rose-300'
-                  : statusMsg.type === 'warn'
-                  ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
-                  : 'bg-violet-950/40 border-violet-500/30 text-violet-300'
-              }`}
-            >
-              <span>{statusMsg.text}</span>
-              <button
-                onClick={() => setStatusMsg(null)}
-                className="text-xs opacity-70 hover:opacity-100"
-              >
-                ✕
-              </button>
+      {/* Grid Dashboard */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        {/* Left Panel: Controls */}
+        <div style={{ background: '#111827', borderRadius: '12px', padding: '24px', border: '1px solid #1f2937' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>1. Bounded Escrow Session</h2>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>Escrow Deposit (USDC)</label>
+              <input
+                type="text"
+                value={escrowDeposit}
+                onChange={(e) => setEscrowDeposit(e.target.value)}
+                style={{ width: '100%', background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '6px', padding: '8px 12px' }}
+              />
             </div>
+
+            <div>
+              <label style={{ display: 'block', color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>Session Duration (Hours)</label>
+              <input
+                type="number"
+                value={durationHours}
+                onChange={(e) => setDurationHours(Number(e.target.value))}
+                style={{ width: '100%', background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '6px', padding: '8px 12px' }}
+              />
+            </div>
+
+            <button
+              onClick={handleOpenSession}
+              disabled={session?.status === 'OPEN'}
+              style={{ background: session?.status === 'OPEN' ? '#374151' : '#9333ea', color: '#fff', border: 'none', borderRadius: '6px', padding: '12px', fontWeight: 'bold', cursor: session?.status === 'OPEN' ? 'not-allowed' : 'pointer' }}
+            >
+              {session?.status === 'OPEN' ? 'Session Open' : 'Open Session On-Chain'}
+            </button>
           </div>
-        )}
 
-        {/* Left Column: Escrow Session Controls */}
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-            <h2 className="text-base font-semibold text-slate-100 mb-4 flex items-center justify-between">
-              <span>Bounded Escrow Session</span>
-              <span className="text-xs font-normal text-slate-400">EIP-712 Gate</span>
-            </h2>
+          {session && (
+            <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #1f2937' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#9ca3af', marginBottom: '8px' }}>Active Session Details</h3>
+              <p style={{ fontSize: '12px', color: '#d1d5db' }}>Session ID: {session.sessionId}</p>
+              <p style={{ fontSize: '12px', color: '#d1d5db' }}>Status: {session.status}</p>
+              <p style={{ fontSize: '12px', color: '#d1d5db' }}>Deposit: {formatUsdc(session.depositAmount)} USDC</p>
+              <p style={{ fontSize: '12px', color: '#d1d5db' }}>Spent: {formatUsdc(totalSpentUSDC)} USDC</p>
+              <p style={{ fontSize: '12px', color: '#d1d5db' }}>Remaining: {formatUsdc(remainingBalance)} USDC</p>
+            </div>
+          )}
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Settlement Contract Address
-                </label>
-                <input
-                  type="text"
-                  value={contractAddress}
-                  onChange={(e) => setContractAddress(e.target.value as Hex)}
-                  disabled={session?.status === 'OPEN'}
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:border-violet-500 disabled:opacity-50"
-                />
+          <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+            <button
+              onClick={handleCheckpointOnChain}
+              disabled={!session || session.status !== 'OPEN'}
+              style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              Checkpoint On-Chain
+            </button>
+            <button
+              onClick={handleCloseSession}
+              disabled={!session || session.status === 'CLOSED'}
+              style={{ flex: 1, background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              Close & Refund
+            </button>
+          </div>
+        </div>
+
+        {/* Right Panel: Video Player */}
+        <div style={{ background: '#111827', borderRadius: '12px', padding: '24px', border: '1px solid #1f2937' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>2. Pay-Per-Use Video Stream</h2>
+
+          <div style={{ width: '100%', height: '240px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <canvas ref={canvasRef} width={400} height={240} style={{ width: '100%', height: '100%' }} />
+            {!isStreaming && (
+              <div style={{ position: 'absolute', color: '#9ca3af', fontSize: '14px' }}>
+                {session?.status === 'OPEN' ? 'Ready to Stream' : 'Open session to unlock video player'}
               </div>
+            )}
+          </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Initial Deposit (USDC)
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={escrowDeposit}
-                    onChange={(e) => setEscrowDeposit(e.target.value)}
-                    disabled={session?.status === 'OPEN'}
-                    className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-violet-500 disabled:opacity-50"
-                  />
-                  <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-semibold">
-                    USDC
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Session Expiry (Hours)
-                </label>
-                <select
-                  value={durationHours}
-                  onChange={(e) => setDurationHours(Number(e.target.value))}
-                  disabled={session?.status === 'OPEN'}
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-violet-500 disabled:opacity-50"
-                >
-                  <option value={1}>1 Hour (Standard)</option>
-                  <option value={4}>4 Hours (Long Stream)</option>
-                  <option value={24}>24 Hours (Event Pass)</option>
-                </select>
-              </div>
-
-              {!session || session.status === 'CLOSED' || session.status === 'REFUNDED' ? (
+          <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '14px', color: '#9ca3af' }}>Segment {currentSegment} / {totalSegments}</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {!isStreaming ? (
                 <button
-                  onClick={handleOpenSession}
-                  className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-medium text-sm transition-all shadow-lg shadow-violet-600/25"
+                  onClick={handleStartStream}
+                  disabled={!session || session.status !== 'OPEN'}
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: 'bold', cursor: 'pointer' }}
                 >
-                  Open Escrow Session
+                  Play Stream
                 </button>
               ) : (
-                <div className="grid grid-cols-2 gap-2 pt-2">
-                  <button
-                    onClick={handleCheckpointOnChain}
-                    disabled={cumulativeUnits === 0n}
-                    className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-violet-300 font-medium text-xs border border-violet-500/30 transition-all disabled:opacity-40"
-                  >
-                    Checkpoint On-Chain
-                  </button>
-                  <button
-                    onClick={handleCloseSession}
-                    className="py-2.5 px-3 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-medium text-xs border border-rose-500/30 transition-all"
-                  >
-                    Settle & Close
-                  </button>
-                </div>
+                <button
+                  onClick={handlePauseStream}
+                  style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: '6px', padding: '8px 16px', fontWeight: 'bold', cursor: 'pointer' }}
+                >
+                  Pause Stream
+                </button>
               )}
             </div>
           </div>
 
-          {/* Active Session Details Card */}
-          {session && (
-            <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400">Session Status:</span>
-                <span
-                  className={`px-2 py-0.5 rounded-full font-semibold ${
-                    session.status === 'OPEN'
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      : session.status === 'CHECKPOINTED'
-                      ? 'bg-violet-500/10 text-violet-400 border border-violet-500/20'
-                      : 'bg-slate-800 text-slate-400'
-                  }`}
-                >
-                  {session.status}
-                </span>
-              </div>
-
-              <div className="text-xs font-mono space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800/60">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Session ID:</span>
-                  <span className="text-slate-300">{session.sessionId?.slice(0, 8)}...{session.sessionId?.slice(-6)}</span>
-                </div>
-                {session.txHash && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Tx Hash:</span>
-                    <span className="text-violet-400 hover:underline cursor-pointer">{session.txHash.slice(0, 8)}...</span>
+          {/* Micro-Voucher Log */}
+          <div style={{ marginTop: '24px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#9ca3af', marginBottom: '8px' }}>Off-Chain Voucher Log</h3>
+            <div style={{ maxHeight: '160px', overflowY: 'auto', background: '#0a0d14', borderRadius: '6px', padding: '8px' }}>
+              {voucherLogs.length === 0 ? (
+                <p style={{ color: '#4b5563', fontSize: '12px', textAlign: 'center' }}>No vouchers signed yet</p>
+              ) : (
+                voucherLogs.map((log) => (
+                  <div key={log.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '4px 0', borderBottom: '1px solid #1f2937' }}>
+                    <span style={{ color: '#a855f7' }}>Seg {log.segmentIndex} ({log.cumulativeUnits} units)</span>
+                    <span style={{ color: '#6b7280' }}>{log.timestamp}</span>
+                    <span style={{ color: log.status === 'CHECKPOINTED_ONCHAIN' ? '#10b981' : '#3b82f6' }}>{log.status}</span>
                   </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Initial Deposit:</span>
-                  <span className="text-slate-200">{formatUsdc(session.depositAmount)} USDC</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Remaining Balance:</span>
-                  <span className="text-emerald-400 font-semibold">{formatUsdc(remainingBalance)} USDC</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Cumulative Units:</span>
-                  <span className="text-violet-300">{cumulativeUnits.toString()}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Center Column: Pay-Per-Use Video Player & Live Controls */}
-        <div className="lg:col-span-8 space-y-6">
-          <div className="bg-[#121826] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl">
-            {/* Stream Header */}
-            <div className="px-5 py-4 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-slate-100 text-sm">Monad HD Stream Demo</h3>
-                <p className="text-xs text-slate-400">0.01 USDC per 2-second segment (0.30 USDC / min)</p>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span className="text-xs text-slate-400">Stream:</span>
-                <select
-                  value={selectedStream}
-                  onChange={(e) => setSelectedStream(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 text-xs rounded-lg px-2.5 py-1 text-slate-200 outline-none"
-                >
-                  <option value="monad-keynote-hd">Monad Keynote HD (0.01 USDC)</option>
-                  <option value="monad-defi-deepdive">DeFi Deep Dive (0.02 USDC)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Video Viewport with Canvas Visualizer */}
-            <div className="relative aspect-video bg-slate-950 flex flex-col items-center justify-center border-b border-slate-800/80 overflow-hidden group">
-              <canvas
-                ref={canvasRef}
-                width={800}
-                height={450}
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-
-              {/* Overlay Player Interface */}
-              <div className="relative z-10 text-center space-y-3 p-6 max-w-md bg-slate-950/60 backdrop-blur-sm rounded-2xl border border-slate-800/60">
-                <div className="w-16 h-16 mx-auto rounded-full bg-slate-900/90 border border-violet-500/40 flex items-center justify-center text-violet-400 text-2xl shadow-xl">
-                  {isStreaming ? '⚡' : '▶'}
-                </div>
-                <div className="space-y-1">
-                  <h4 className="text-base font-semibold text-slate-200">
-                    {isStreaming ? 'Streaming & Micro-Paying...' : 'Stream Paused'}
-                  </h4>
-                  <p className="text-xs text-slate-400">
-                    {session?.status === 'OPEN'
-                      ? 'EIP-712 micro-vouchers signing every 2s off-chain'
-                      : 'Open an escrow session to start playback.'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-slate-900">
-                <div
-                  className="h-full bg-gradient-to-r from-violet-500 to-indigo-400 transition-all duration-300"
-                  style={{ width: `${(currentSegment / totalSegments) * 100}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Player Controls & Metrics */}
-            <div className="p-5 bg-[#0F1420] flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                {!isStreaming ? (
-                  <button
-                    onClick={handleStartStream}
-                    disabled={session?.status !== 'OPEN'}
-                    className="py-2.5 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white font-medium text-xs transition-all shadow-lg shadow-violet-600/20 flex items-center space-x-2"
-                  >
-                    <span>Play Stream</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={handlePauseStream}
-                    className="py-2.5 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-medium text-xs border border-amber-500/30 transition-all flex items-center space-x-2"
-                  >
-                    <span>Pause Stream</span>
-                  </button>
-                )}
-
-                <div className="text-xs text-slate-400 font-mono">
-                  Segment {currentSegment} / {totalSegments} ({Math.round((currentSegment / totalSegments) * 100)}%)
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-6 text-xs">
-                <div className="text-right">
-                  <span className="block text-slate-400">Total Spent</span>
-                  <span className="font-bold text-violet-400 font-mono text-sm">{formatUsdc(totalSpentUSDC)} USDC</span>
-                </div>
-                <div className="text-right">
-                  <span className="block text-slate-400">Remaining</span>
-                  <span className="font-bold text-emerald-400 font-mono text-sm">{formatUsdc(remainingBalance)} USDC</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Real-time Signed EIP-712 Voucher Log */}
-          <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 shadow-xl space-y-4">
-            <h3 className="text-sm font-semibold text-slate-200 flex items-center justify-between">
-              <span>Live Micro-Payment Voucher Log (EIP-712 Signed)</span>
-              <span className="text-xs font-mono text-violet-400">{voucherLogs.length} Vouchers Signed</span>
-            </h3>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="pb-2 font-medium">Segment</th>
-                    <th className="pb-2 font-medium">Cumulative Units</th>
-                    <th className="pb-2 font-medium">Cumulative Spent</th>
-                    <th className="pb-2 font-medium">Time</th>
-                    <th className="pb-2 font-medium">EIP-712 Signature</th>
-                    <th className="pb-2 font-medium text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {voucherLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-6 text-center text-slate-500">
-                        No micro-vouchers signed yet. Start playback to view real-time state.
-                      </td>
-                    </tr>
-                  ) : (
-                    voucherLogs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-900/40 transition-colors">
-                        <td className="py-2.5 text-slate-300">Seg #{log.segmentIndex}</td>
-                        <td className="py-2.5 text-violet-300">{log.cumulativeUnits.toString()} units</td>
-                        <td className="py-2.5 text-emerald-400 font-semibold">{formatUsdc(log.cumulativeUnits * parseUsdc('0.01'))} USDC</td>
-                        <td className="py-2.5 text-slate-400">{log.timestamp}</td>
-                        <td className="py-2.5 text-slate-500 text-[10px]">{log.signature.slice(0, 14)}...</td>
-                        <td className="py-2.5 text-right">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-sans ${
-                              log.status === 'CHECKPOINTED_ONCHAIN'
-                                ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
-                                : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            }`}
-                          >
-                            {log.status === 'CHECKPOINTED_ONCHAIN' ? 'On-Chain' : 'Off-Chain Valid'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                ))
+              )}
             </div>
           </div>
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }

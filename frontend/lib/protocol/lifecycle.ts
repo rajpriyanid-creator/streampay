@@ -4,8 +4,8 @@
  * The functions here wrap viem wallet/public client calls that send REAL
  * transactions to the StreamPaySettlement contract (local Anvil or Monad testnet).
  *
- * Every function accepts explicit parameters so the caller (page.tsx) does not
- * need to import viem directly.
+ * All digest signatures use raw hash signing (account.sign({ hash: digest }))
+ * so that signatures match Solidity's _hashTypedDataV4 / SignatureChecker recovery.
  */
 
 import {
@@ -20,7 +20,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-// ─── Settlement ABI (minimal) ──────────────────────────────────────
+// ─── Settlement ABI (exact matching Solidity) ─────────────────────
 const openAbi = [
   {
     type: 'function',
@@ -51,7 +51,7 @@ const openAbi = [
       },
       { name: 'cfgSig', type: 'bytes' },
     ],
-    outputs: [{ name: 'sessionId', type: 'bytes32' }],
+    outputs: [],
   },
 ] as const;
 
@@ -145,9 +145,8 @@ const approveAbi = [
   },
 ] as const;
 
-// ─── helpers ─────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────
 function pub(rpc: string) { return createPublicClient({ transport: http(rpc) }); }
-
 function wallet(rpc: string, key: Hex) {
   return createWalletClient({ account: privateKeyToAccount(key), transport: http(rpc) });
 }
@@ -168,7 +167,7 @@ export async function openSession(p: {
   const signer = privateKeyToAccount(p.signerKey);
   const now = BigInt(Math.floor(Date.now() / 1000));
 
-  // ensure allowance
+  // Ensure ERC-20 allowance for settlement contract
   const allow = await pc.readContract({ address: p.token, abi: approveAbi, functionName: 'allowance', args: [payer, p.settlement] });
   if ((allow as bigint) < p.deposit) {
     const h = await payerWallet.writeContract({ address: p.token, abi: approveAbi, functionName: 'approve', args: [p.settlement, p.deposit * 10n], chain: null });
@@ -186,7 +185,7 @@ export async function openSession(p: {
   };
 
   const offerDigest = await pc.readContract({ address: p.settlement, abi: hashOfferAbi, functionName: 'hashContentOffer', args: [offer] }) as Hex;
-  const offerSig = await creator.signMessage({ message: { raw: offerDigest } });
+  const offerSig = await creator.sign({ hash: offerDigest });
 
   const cfg = {
     payer, sessionSigner: signer.address,
@@ -196,7 +195,7 @@ export async function openSession(p: {
   };
 
   const cfgDigest = await pc.readContract({ address: p.settlement, abi: hashConfigAbi, functionName: 'hashSessionConfig', args: [cfg] }) as Hex;
-  const cfgSig = await privateKeyToAccount(p.payerKey).signMessage({ message: { raw: cfgDigest } });
+  const cfgSig = await privateKeyToAccount(p.payerKey).sign({ hash: cfgDigest });
 
   const txHash = await payerWallet.writeContract({
     address: p.settlement, abi: openAbi, functionName: 'openWithSignature',
@@ -219,7 +218,7 @@ export async function signVoucher(p: {
     address: p.settlement, abi: hashVoucherAbi, functionName: 'hashVoucher',
     args: [{ sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }],
   }) as Hex;
-  return account.signMessage({ message: { raw: digest } });
+  return account.sign({ hash: digest });
 }
 
 // ─── checkpoint ─────────────────────────────────────────────────
@@ -252,7 +251,7 @@ export async function closeCooperative(p: {
   const ackDigest = await pc.readContract({
     address: p.settlement, abi: hashCloseAckAbi, functionName: 'hashCloseAck', args: [ack],
   }) as Hex;
-  const ackSig = await privateKeyToAccount(p.creatorKey).signMessage({ message: { raw: ackDigest } });
+  const ackSig = await privateKeyToAccount(p.creatorKey).sign({ hash: ackDigest });
 
   const w = wallet(p.rpc, p.anyKey);
   const txHash = await w.writeContract({

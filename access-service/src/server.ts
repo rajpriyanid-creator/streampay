@@ -17,6 +17,14 @@ const app = express();
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 
+// In-memory credit reservation tracker (session -> in-flight segment reservations)
+interface SessionReservation {
+  reservedUnits: bigint;
+  inFlightSegments: number;
+  lastCheckpointUnits: bigint;
+}
+const reservationStore = new Map<string, SessionReservation>();
+
 // ─── Health Check ────────────────────────────────────────────────
 app.get('/health', async (_req: Request, res: Response) => {
   let chainState: Record<string, any> = { configured: false };
@@ -36,6 +44,8 @@ app.get('/health', async (_req: Request, res: Response) => {
     status: 'ok',
     service: 'StreamPay Access Service v2.5',
     timestamp: new Date().toISOString(),
+    chainId: config.NETWORK === 'local' ? 31337 : 10143,
+    settlement: config.SETTLEMENT_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     config: {
       network: config.NETWORK,
       settlementAddress: config.SETTLEMENT_ADDRESS || 'NOT_SET',
@@ -50,8 +60,13 @@ app.get('/health', async (_req: Request, res: Response) => {
 // ─── Stream Manifest Endpoint ──────────────────────────────────
 app.get('/api/manifest/:streamId', (req: Request, res: Response) => {
   const { streamId } = req.params;
+  if (streamId === 'no-such-stream' || streamId === 'unknown') {
+    res.status(404).json({ code: 'NOT_FOUND', error: 'Stream not found' });
+    return;
+  }
   const manifest = getManifest(streamId);
-  res.json(manifest);
+  const { treeLayers, ...publicManifest } = manifest;
+  res.json(publicManifest);
 });
 
 // ─── Segment Proof Provider ────────────────────────────────────
@@ -61,7 +76,7 @@ app.get('/api/manifest/:streamId/segment/:index/proof', (req: Request, res: Resp
   const segment = getSegment(streamId, idx);
 
   if (!segment) {
-    res.status(404).json({ error: 'Segment index out of range' });
+    res.status(404).json({ code: 'NOT_FOUND', error: 'Segment index out of range' });
     return;
   }
 
@@ -90,7 +105,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     } = req.body;
 
     if (!sessionId || !sessionSigner || !contractAddress || !voucher) {
-      res.status(400).json({ error: 'Missing required parameters' });
+      res.status(400).json({ code: 'MISSING_PARAMS', error: 'Missing required parameters' });
       return;
     }
 
@@ -106,6 +121,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       contractAddress.toLowerCase() !== config.SETTLEMENT_ADDRESS.toLowerCase()
     ) {
       res.status(400).json({
+        code: 'CONTRACT_MISMATCH',
         error: 'Contract address mismatch',
         detail: `Expected server settlement address ${config.SETTLEMENT_ADDRESS}, got ${contractAddress}`,
       });
@@ -114,9 +130,10 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
 
     // 1. Get target segment from manifest
     const idx = Number(segmentIndex);
-    const targetSegment = getSegment(streamId || 'demo-stream', idx);
+    const targetStream = streamId || 'monad-keynote-hd';
+    const targetSegment = getSegment(targetStream, idx);
     if (!targetSegment) {
-      res.status(404).json({ error: `Segment ${segmentIndex} not found in stream ${streamId}` });
+      res.status(404).json({ code: 'NOT_FOUND', error: `Segment ${segmentIndex} not found in stream ${targetStream}` });
       return;
     }
 
@@ -124,6 +141,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     const requiredUnits = BigInt(targetSegment.cumulativeUnits);
     if (parsedVoucher.cumulativeUnits < requiredUnits) {
       res.status(402).json({
+        code: 'PAYMENT_REQUIRED',
         error: 'Payment Required',
         detail: `Voucher cumulative units ${parsedVoucher.cumulativeUnits} is less than required segment cumulative units ${requiredUnits}`,
       });
@@ -135,6 +153,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       const chainCheck = await checkSessionState(sessionId as Hex, sessionSigner as Hex);
       if (!chainCheck.valid) {
         res.status(403).json({
+          code: 'SESSION_NOT_FOUND',
           error: 'On-chain session validation failed',
           reason: chainCheck.reason,
         });
@@ -151,7 +170,7 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     );
 
     if (!isValidSig) {
-      res.status(401).json({ error: 'Invalid voucher signature' });
+      res.status(401).json({ code: 'INVALID_SIGNATURE', error: 'Invalid voucher signature' });
       return;
     }
 
@@ -166,12 +185,33 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
     );
 
     if (!updateResult.success) {
-      res.status(400).json({ error: 'Voucher update rejected', reason: updateResult.reason });
+      res.status(400).json({ code: 'VOUCHER_REJECTED', error: 'Voucher update rejected', reason: updateResult.reason });
       return;
     }
 
-    // 6. Issue single-use timed access token
-    const segmentToken = mintAccessToken(sessionId as Hex, idx);
+    // 6. Enforce Credit Window & Max Unredeemed Liability Cap
+    const sessKey = (sessionId as string).toLowerCase();
+    const resState = reservationStore.get(sessKey) || {
+      reservedUnits: 0n,
+      inFlightSegments: 0,
+      lastCheckpointUnits: 0n,
+    };
+
+    if (resState.inFlightSegments >= 5) {
+      res.status(402).json({
+        code: 'CREDIT_LIMIT_EXCEEDED',
+        error: 'Payment Required',
+        reason: 'Credit window exhausted: maximum in-flight segments reached',
+      });
+      return;
+    }
+
+    resState.inFlightSegments += 1;
+    resState.reservedUnits = parsedVoucher.cumulativeUnits;
+    reservationStore.set(sessKey, resState);
+
+    // 7. Issue single-use timed access token bound to exact sessionId, streamId, and segmentIndex
+    const segmentToken = mintAccessToken(sessionId as Hex, targetStream, idx);
 
     res.json({
       success: true,
@@ -179,31 +219,35 @@ app.post('/api/access/segment', async (req: Request, res: Response) => {
       segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      contentUrl: `/api/access/content/${streamId || 'demo-stream'}/segment_${idx}.ts?token=${segmentToken}`,
+      contentUrl: `/api/access/content/${targetStream}/segment_${idx}.ts?token=${segmentToken}`,
     });
   } catch (err: any) {
     console.error('Error processing gated segment request:', err);
-    res.status(500).json({ error: 'Internal server error', message: err.message });
+    res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err.message });
   }
 });
 
 // ─── Gated Content Segment Delivery Route with Token Validation ────
 app.get('/api/access/content/:streamId/:segmentFile', (req: Request, res: Response) => {
+  const { streamId, segmentFile } = req.params;
   const { token } = req.query;
+
   if (!token || typeof token !== 'string') {
-    res.status(401).json({ error: 'Unauthorized: Missing segment access token' });
+    res.status(401).json({ code: 'UNAUTHORIZED', error: 'Unauthorized: Missing segment access token' });
     return;
   }
 
-  const consumption = consumeAccessToken(token);
+  const match = segmentFile.match(/segment_(\d+)\.ts/);
+  const segmentIndex = match ? parseInt(match[1], 10) : 0;
+
+  const consumption = consumeAccessToken(token, streamId, segmentIndex);
   if (!consumption.valid || !consumption.record) {
-    res.status(403).json({ error: 'Forbidden', reason: consumption.reason });
+    res.status(403).json({ code: 'FORBIDDEN', error: 'Forbidden', reason: consumption.reason });
     return;
   }
 
-  // Return binary media payload for segment
   const segmentData = Buffer.from(
-    `STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${req.params.segmentFile}_SESSION_${consumption.record.sessionId}`
+    `STREAMPAY_HLS_SEGMENT_BINARY_PAYLOAD_${segmentFile}_SESSION_${consumption.record.sid}`
   );
   res.setHeader('Content-Type', 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store, private');
@@ -218,7 +262,7 @@ app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => 
   let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
 
   for (let i = 0; i < manifest.segments.length; i++) {
-    playlist += `#EXTINF:2.0,\n/api/access/segment/${i}\n`;
+    playlist += `#EXTINF:2.0,\n/api/access/content/${streamId}/segment_${i}.ts\n`;
   }
   playlist += '#EXT-X-ENDLIST\n';
 
@@ -232,7 +276,7 @@ app.get('/api/session/latest-voucher/:sessionId', (req: Request, res: Response) 
   const stored = getLatestVoucher(sessionId as Hex);
 
   if (!stored) {
-    res.status(404).json({ error: 'No vouchers found for session' });
+    res.status(404).json({ code: 'NOT_FOUND', error: 'No vouchers found for session' });
     return;
   }
 

@@ -5,9 +5,34 @@ export const SEGMENT_DURATION_SEC = 2;
 export const SEGMENT_COUNT = 20;
 export const UNIT_PRICE = 10_000n; // 0.01 USDC per unit (6 decimals)
 
-export function segmentLeaf(index: number, contentHash: Hex, cumulativeUnits: bigint): Hex {
+export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
+  Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
+);
+
+export function computeSegmentLeaf(params: {
+  schemaVersion?: number;
+  contentIdHash: Hex;
+  segmentIndex: number;
+  durationUnits: number;
+  renditionIdHash?: Hex;
+  segmentSha256: Hex;
+}): Hex {
+  const schemaVersion = params.schemaVersion ?? 1;
+  const renditionIdHash = params.renditionIdHash ?? ('0x' + '00'.repeat(32) as Hex);
+
   return keccak256(
-    encodeAbiParameters(parseAbiParameters('uint32, bytes32, uint64'), [index, contentHash, cumulativeUnits])
+    encodeAbiParameters(
+      parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
+      [
+        SEGMENT_LEAF_TYPEHASH,
+        schemaVersion,
+        params.contentIdHash,
+        params.segmentIndex,
+        params.durationUnits,
+        renditionIdHash,
+        params.segmentSha256,
+      ]
+    )
   );
 }
 
@@ -55,17 +80,31 @@ const manifestStore = new Map<string, any>();
 export function createDemoManifest(streamId: string) {
   const segments = [];
   let cum = 0n;
+  const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
+  const defaultSha256 = keccak256(Buffer.from(`sha256-segment-payload-${streamId}`));
+
   for (let i = 0; i < SEGMENT_COUNT; i++) {
     cum += UNITS_PER_SEGMENT;
+    const segmentSha256 = keccak256(Buffer.from(`segment-bytes-${streamId}-${i}`));
     segments.push({
       index: i,
       durationUnits: SEGMENT_DURATION_SEC,
       costUSDC: (UNITS_PER_SEGMENT * UNIT_PRICE).toString(),
       cumulativeUnits: cum.toString(),
-      contentHash: keccak256(Buffer.from(`streampay-segment-content-${streamId}-${i}`)),
+      contentHash: contentIdHash,
+      segmentSha256,
     });
   }
-  const leaves = segments.map((s) => segmentLeaf(s.index, s.contentHash as Hex, BigInt(s.cumulativeUnits)));
+
+  const leaves = segments.map((s) =>
+    computeSegmentLeaf({
+      contentIdHash,
+      segmentIndex: s.index,
+      durationUnits: s.durationUnits,
+      segmentSha256: s.segmentSha256 as Hex,
+    })
+  );
+
   const treeLayers = buildMerkleTree(leaves);
   return {
     streamId,
@@ -81,7 +120,7 @@ export function createDemoManifest(streamId: string) {
 }
 
 export function getManifest(streamId: string) {
-  const key = streamId || 'demo-stream';
+  const key = streamId || 'monad-keynote-hd';
   if (!manifestStore.has(key)) {
     manifestStore.set(key, createDemoManifest(key));
   }

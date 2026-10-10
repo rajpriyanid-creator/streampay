@@ -17,8 +17,8 @@ import {
   http,
   type Hex,
   type Address,
-  privateKeyToAccount,
 } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const RPC_URL = process.env.RPC_URL || 'http://127.0.0.1:8545';
 const ACCESS_SERVICE_URL = process.env.ACCESS_SERVICE_URL || 'http://localhost:4001';
@@ -30,6 +30,45 @@ const account = privateKeyToAccount(RELAYER_KEY);
 const walletClient = createWalletClient({ account, transport: http(RPC_URL) });
 
 const SESSION_STATUS = { NONE: 0, OPEN: 1, CLOSE_REQUESTED: 2, CLOSED: 3 } as const;
+
+const settlementAbi = [
+  {
+    type: 'function', name: 'getSession', stateMutability: 'view',
+    inputs: [{ name: 'sessionId', type: 'bytes32' }],
+    outputs: [{ name: '', type: 'tuple', components: [
+      { name: 'payer', type: 'address' }, { name: 'sessionSigner', type: 'address' }, { name: 'recipient', type: 'address' },
+      { name: 'offerDigest', type: 'bytes32' }, { name: 'contentIdHash', type: 'bytes32' }, { name: 'pricingPolicyHash', type: 'bytes32' },
+      { name: 'manifestRoot', type: 'bytes32' }, { name: 'initialDeposit', type: 'uint256' }, { name: 'unitPrice', type: 'uint256' },
+      { name: 'maxUnredeemedAmount', type: 'uint256' }, { name: 'settledAmount', type: 'uint256' }, { name: 'settledUnits', type: 'uint64' },
+      { name: 'maxBillableUnits', type: 'uint64' }, { name: 'maxCreditWindowUnits', type: 'uint64' }, { name: 'maxLeadUnits', type: 'uint64' },
+      { name: 'openedAt', type: 'uint64' }, { name: 'validUntil', type: 'uint64' }, { name: 'offerExpiresAt', type: 'uint64' },
+      { name: 'redemptionGraceSeconds', type: 'uint64' }, { name: 'redemptionDeadline', type: 'uint64' },
+      { name: 'closeRequestedAt', type: 'uint64' }, { name: 'challengeEndsAt', type: 'uint64' },
+      { name: 'maxCreditSegments', type: 'uint8' }, { name: 'status', type: 'uint8' },
+    ]}],
+  },
+  {
+    type: 'function', name: 'checkpoint', stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'sessionId', type: 'bytes32' },
+      { name: 'voucher', type: 'tuple', components: [
+        { name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' },
+      ]},
+      { name: 'voucherSig', type: 'bytes' },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function', name: 'finalizeAfterChallenge', stateMutability: 'nonpayable',
+    inputs: [{ name: 'sessionId', type: 'bytes32' }],
+    outputs: [],
+  },
+  {
+    type: 'function', name: 'finalizeExpired', stateMutability: 'nonpayable',
+    inputs: [{ name: 'sessionId', type: 'bytes32' }],
+    outputs: [],
+  },
+] as const;
 
 export interface SweeperStats {
   checkedSessions: number;
@@ -71,10 +110,83 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
 
         if (!lastVoucher || !lastVoucher.signature) continue;
 
-        console.log(`[Sweeper] Inspecting session ${sessionId.slice(0, 10)}... (Units: ${lastVoucher.cumulativeUnits})`);
+        // Read session state directly from contract
+        const onChainSession = (await publicClient.readContract({
+          address: SETTLEMENT_ADDRESS,
+          abi: settlementAbi,
+          functionName: 'getSession',
+          args: [sessionId],
+        })) as any;
+
+        const status = Number(onChainSession.status);
+        const settledUnits = BigInt(onChainSession.settledUnits);
+        const voucherUnits = BigInt(lastVoucher.cumulativeUnits);
+        const challengeEndsAt = BigInt(onChainSession.challengeEndsAt);
+        const redemptionDeadline = BigInt(onChainSession.redemptionDeadline);
+        const now = BigInt(Math.floor(Date.now() / 1000));
+
+        // 1. OPEN session with un-checkpointed higher voucher -> Checkpoint
+        if (status === SESSION_STATUS.OPEN && voucherUnits > settledUnits && now < redemptionDeadline) {
+          console.log(`[Sweeper] Checkpointing session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
+          const txHash = await walletClient.writeContract({
+            address: SETTLEMENT_ADDRESS,
+            abi: settlementAbi,
+            functionName: 'checkpoint',
+            args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
+            chain: null,
+          });
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          stats.checkpointsSubmitted++;
+          console.log(`[Sweeper] ✅ Checkpoint tx confirmed: ${txHash.slice(0, 12)}...`);
+        }
+
+        // 2. CLOSE_REQUESTED session with un-checkpointed voucher -> Submit counter-voucher before challengeEndsAt
+        if (status === SESSION_STATUS.CLOSE_REQUESTED && voucherUnits > settledUnits && now < challengeEndsAt) {
+          console.log(`[Sweeper] Defending challenge for session ${sessionId.slice(0, 10)}... (${voucherUnits} units)`);
+          const txHash = await walletClient.writeContract({
+            address: SETTLEMENT_ADDRESS,
+            abi: settlementAbi,
+            functionName: 'checkpoint',
+            args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
+            chain: null,
+          });
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          stats.checkpointsSubmitted++;
+          console.log(`[Sweeper] ✅ Challenge defense tx confirmed: ${txHash.slice(0, 12)}...`);
+        }
+
+        // 3. CLOSE_REQUESTED session past challengeEndsAt -> Finalize After Challenge
+        if (status === SESSION_STATUS.CLOSE_REQUESTED && now >= challengeEndsAt) {
+          console.log(`[Sweeper] Finalizing challenge for session ${sessionId.slice(0, 10)}...`);
+          const txHash = await walletClient.writeContract({
+            address: SETTLEMENT_ADDRESS,
+            abi: settlementAbi,
+            functionName: 'finalizeAfterChallenge',
+            args: [sessionId],
+            chain: null,
+          });
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          stats.finalizationsExecuted++;
+          console.log(`[Sweeper] ✅ Finalize challenge tx confirmed: ${txHash.slice(0, 12)}...`);
+        }
+
+        // 4. OPEN session past redemptionDeadline -> Finalize Expired
+        if (status === SESSION_STATUS.OPEN && now >= redemptionDeadline) {
+          console.log(`[Sweeper] Finalizing expired session ${sessionId.slice(0, 10)}...`);
+          const txHash = await walletClient.writeContract({
+            address: SETTLEMENT_ADDRESS,
+            abi: settlementAbi,
+            functionName: 'finalizeExpired',
+            args: [sessionId],
+            chain: null,
+          });
+          await publicClient.waitForTransactionReceipt({ hash: txHash });
+          stats.finalizationsExecuted++;
+          console.log(`[Sweeper] ✅ Finalize expired tx confirmed: ${txHash.slice(0, 12)}...`);
+        }
       } catch (err: any) {
         stats.errorsEncountered++;
-        console.error(`[Sweeper] Error inspecting session: ${err.message}`);
+        console.error(`[Sweeper] Error processing session: ${err.message}`);
       }
     }
   } catch (err: any) {

@@ -1,10 +1,14 @@
 /**
  * StreamPay Unified Merkle Manifest Generator Utility
- * Generates sample segment manifests with deterministic Keccak-256 Merkle trees.
+ * Generates sample segment manifests with deterministic Keccak-256 Merkle trees matching StreamPaySegmentLeaf struct.
  */
 const { keccak256, encodeAbiParameters, parseAbiParameters } = require('viem');
 const fs = require('fs');
 const path = require('path');
+
+const SEGMENT_LEAF_TYPEHASH = keccak256(
+  Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
+);
 
 function hashPair(a, b) {
   const left = a.toLowerCase() < b.toLowerCase() ? a : b;
@@ -16,27 +20,36 @@ function generateManifest(streamId, segmentCount, unitsPerSegment) {
   const segments = [];
   let cumulativeUnits = 0n;
   const UNITS_PER_SEG = BigInt(unitsPerSegment);
+  const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
+  const zeroRendition = '0x' + '00'.repeat(32);
 
   for (let i = 0; i < segmentCount; i++) {
     cumulativeUnits += UNITS_PER_SEG;
-    const contentHash = keccak256(
-      Buffer.from(`streampay-segment-content-${streamId}-${i}`)
-    );
+    const segmentSha256 = keccak256(Buffer.from(`segment-bytes-${streamId}-${i}`));
     segments.push({
       index: i,
       durationUnits: Number(UNITS_PER_SEG),
       costUSDC: (UNITS_PER_SEG * 10000n).toString(), // 0.01 USDC per unit
       cumulativeUnits: cumulativeUnits.toString(),
-      contentHash,
+      contentIdHash,
+      segmentSha256,
     });
   }
 
-  // Leaf calculation matching contract leaf format exactly
+  // Canonical StreamPaySegmentLeaf calculation matching contract specification
   const leaves = segments.map((s) =>
     keccak256(
       encodeAbiParameters(
-        parseAbiParameters('uint32, bytes32, uint64'),
-        [s.index, s.contentHash, BigInt(s.cumulativeUnits)]
+        parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
+        [
+          SEGMENT_LEAF_TYPEHASH,
+          1,
+          s.contentIdHash,
+          s.index,
+          s.durationUnits,
+          zeroRendition,
+          s.segmentSha256,
+        ]
       )
     )
   );

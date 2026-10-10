@@ -1,22 +1,39 @@
 /**
  * StreamPay Unified Merkle Manifest Verification & Leaf Encoding
- * Standardized Keccak-256 Merkle tree calculation matching Solidity contract.
+ * Standardized Keccak-256 Merkle tree calculation matching Solidity contract & protocol spec.
  */
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
 
+export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
+  Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
+);
+
 /**
- * Compute segment leaf hash matching Solidity contract:
- * keccak256(abi.encode(uint32 segmentIndex, bytes32 contentHash, uint64 cumulativeUnits))
+ * Canonical segment leaf computation matching StreamPaySegmentLeaf struct.
  */
 export function computeSegmentLeaf(params: {
+  schemaVersion?: number;
+  contentIdHash: Hex;
   segmentIndex: number;
-  contentHash: Hex;
-  cumulativeUnits: bigint;
+  durationUnits: number;
+  renditionIdHash?: Hex;
+  segmentSha256: Hex;
 }): Hex {
+  const schemaVersion = params.schemaVersion ?? 1;
+  const renditionIdHash = params.renditionIdHash ?? ('0x' + '00'.repeat(32) as Hex);
+
   return keccak256(
     encodeAbiParameters(
-      parseAbiParameters('uint32, bytes32, uint64'),
-      [params.segmentIndex, params.contentHash, params.cumulativeUnits]
+      parseAbiParameters('bytes32, uint32, bytes32, uint32, uint32, bytes32, bytes32'),
+      [
+        SEGMENT_LEAF_TYPEHASH,
+        schemaVersion,
+        params.contentIdHash,
+        params.segmentIndex,
+        params.durationUnits,
+        renditionIdHash,
+        params.segmentSha256,
+      ]
     )
   );
 }
@@ -30,8 +47,6 @@ export async function hashSegmentBytes(bytes: Uint8Array): Promise<Hex> {
   const hex = Array.from(hashArray).map(b => b.toString(16).padStart(2, '0')).join('');
   return `0x${hex}` as Hex;
 }
-
-
 
 /**
  * Hash two Merkle nodes in sorted lexicographical order.
@@ -100,7 +115,6 @@ export function buildMerkleTree(leaves: Hex[]): {
 
         nextIndices.push([...leafIndices[i], ...leafIndices[i + 1]]);
       } else {
-        // Odd node - pair with self
         const hash = hashPair(currentLevel[i], currentLevel[i]);
         nextLevel.push(hash);
 

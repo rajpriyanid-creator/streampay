@@ -3,8 +3,7 @@
  * Gates every segment request through the access service.
  * Validates segment integrity (SHA-256 + Merkle proof) before voucher signing.
  *
- * This is NOT a security boundary by itself - the server enforces all entitlements.
- * The client verification adds a trust layer for honest clients.
+ * Standardized to canonical StreamPaySegmentLeaf struct hashing.
  */
 
 import type Hls from 'hls.js';
@@ -20,14 +19,9 @@ export interface StreamPayLoaderConfig {
   onAccessTokenRequest?: (segmentIndex: number) => Promise<string>;
 }
 
-/**
- * Creates a custom fragment loader class for HLS.js.
- * The returned class must be set as `fLoader` in the HLS.js config.
- */
 export function createStreamPayFragmentLoader(
   config: StreamPayLoaderConfig
 ): any {
-  // Return a class that implements the HLS.js Loader interface
   return class StreamPayFragmentLoader {
     private context: any = null;
     private callbacks: any = null;
@@ -48,75 +42,57 @@ export function createStreamPayFragmentLoader(
       };
     }
 
-    destroy(): void {
-      this.abort();
-    }
-
-    abort(): void {
-      if (this.abortController) {
-        this.abortController.abort();
-        this.abortController = null;
-      }
-      this.stats.aborted = true;
-    }
-
-    load(context: any, _config: any, callbacks: any): void {
+    load(context: any, hlsConfig: any, callbacks: any): void {
       this.context = context;
       this.callbacks = callbacks;
+      this.abortController = new AbortController();
       this.stats.loading.start = performance.now();
 
-      // Check if this is a fragment request
-      if (context.frag) {
-        this._loadFragment(context, callbacks).catch((err: Error) => {
-          if (callbacks.onError) {
-            callbacks.onError(
-              { code: 0, text: err.message },
-              context,
-              null,
-              this.stats
-            );
-          }
-        });
-      } else {
-        // Playlist/manifest request - use standard fetch
-        this._loadStandard(context, callbacks);
-      }
+      this.executeGatedLoad(context, callbacks).catch((err) => {
+        if (!this.stats.aborted) {
+          callbacks.onError(
+            { code: 403, text: err.message },
+            context,
+            null
+          );
+        }
+      });
     }
 
-    private async _loadFragment(context: any, callbacks: any): Promise<void> {
-      const segmentIndex = context.frag.sn as number;
-      this.abortController = new AbortController();
+    private async executeGatedLoad(context: any, callbacks: any): Promise<void> {
+      const url: string = context.url;
+      const match = url.match(/segment[_-](\d+)/i) || url.match(/(\d+)\.ts$/);
+      const segmentIndex = match ? parseInt(match[1], 10) : 0;
 
-      try {
-        // 1. Get access token from access service
-        let accessToken = '';
-        if (config.onAccessTokenRequest) {
-          accessToken = await config.onAccessTokenRequest(segmentIndex);
-        }
+      // 1. Obtain single-use access token
+      let token = '';
+      if (config.onAccessTokenRequest) {
+        token = await config.onAccessTokenRequest(segmentIndex);
+      }
 
-        // 2. Fetch segment with session-bound headers
-        const url = context.url || `${config.accessServiceUrl}/api/segments/${segmentIndex}`;
-        const response = await fetch(url, {
-          headers: {
-            'X-StreamPay-Session': config.sessionId,
-            'X-StreamPay-Segment': segmentIndex.toString(),
-            'X-StreamPay-Token': accessToken,
-          },
-          signal: this.abortController.signal,
-        });
+      // 2. Build gated content URL
+      const fetchUrl = token
+        ? `${config.accessServiceUrl}/api/access/content/monad-keynote-hd/segment_${segmentIndex}.ts?token=${token}`
+        : url;
 
-        if (!response.ok) {
-          throw new Error(`Segment fetch failed: ${response.status} ${response.statusText}`);
-        }
+      // 3. Fetch binary segment bytes
+      const response = await fetch(fetchUrl, {
+        signal: this.abortController?.signal,
+      });
 
-        const data = await response.arrayBuffer();
-        const bytes = new Uint8Array(data);
+      if (!response.ok) {
+        throw new Error(`Segment fetch failed with HTTP ${response.status}`);
+      }
 
-        this.stats.loading.first = performance.now();
-        this.stats.loaded = data.byteLength;
-        this.stats.total = data.byteLength;
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
 
-        // 3. Verify segment integrity against manifest
+      this.stats.loaded = bytes.byteLength;
+      this.stats.total = bytes.byteLength;
+      this.stats.loading.first = performance.now();
+
+      // 4. Verify segment integrity (SHA-256 + Canonical Merkle Proof)
+      if (config.manifest && config.manifest.segments) {
         const manifestEntry = config.manifest.segments.find(
           (s) => s.segmentIndex === segmentIndex
         );
@@ -124,18 +100,19 @@ export function createStreamPayFragmentLoader(
         if (manifestEntry) {
           const segmentHash = await hashSegmentBytes(bytes);
 
-          // Verify SHA-256 hash if present
+          // Verify SHA-256 hash
           if (manifestEntry.segmentSha256 && segmentHash.toLowerCase() !== manifestEntry.segmentSha256.toLowerCase()) {
             const reason = 'SEGMENT_HASH_MISMATCH';
             config.onSegmentFailed?.(segmentIndex, reason);
             throw new Error(reason);
           }
 
-          // Verify Merkle proof
+          // Verify Canonical Merkle proof using StreamPaySegmentLeaf
           const leaf = computeSegmentLeaf({
+            contentIdHash: config.manifest.contentIdHash as `0x${string}`,
             segmentIndex: manifestEntry.segmentIndex,
-            contentHash: ((manifestEntry as any).contentHash || config.manifest.contentIdHash) as `0x${string}`,
-            cumulativeUnits: BigInt((manifestEntry as any).cumulativeUnits || manifestEntry.durationUnits),
+            durationUnits: manifestEntry.durationUnits,
+            segmentSha256: (manifestEntry.segmentSha256 || segmentHash) as `0x${string}`,
           });
 
           const proofValid = verifyMerkleProof(
@@ -150,87 +127,34 @@ export function createStreamPayFragmentLoader(
             throw new Error(reason);
           }
 
-          // 4. Segment verified! Notify for voucher signing
           config.onSegmentVerified?.(segmentIndex, manifestEntry.durationUnits);
         }
+      }
 
+      this.stats.loading.end = performance.now();
 
-        this.stats.loading.end = performance.now();
+      // 5. Deliver segment bytes to HLS.js
+      callbacks.onSuccess(
+        {
+          url: fetchUrl,
+          data: buffer,
+        },
+        this.stats,
+        context
+      );
+    }
 
-        // 5. Return segment data to HLS.js
-        if (callbacks.onSuccess) {
-          callbacks.onSuccess(
-            { url: context.url, data },
-            this.stats,
-            context,
-            null
-          );
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-        throw err;
+    abort(): void {
+      this.stats.aborted = true;
+      if (this.abortController) {
+        this.abortController.abort();
       }
     }
 
-    private _loadStandard(context: any, callbacks: any): void {
-      this.abortController = new AbortController();
-
-      fetch(context.url, { signal: this.abortController.signal })
-        .then(async (response) => {
-          if (!response.ok) {
-            throw new Error(`Fetch failed: ${response.status}`);
-          }
-          const data = await response.arrayBuffer();
-          this.stats.loaded = data.byteLength;
-          this.stats.total = data.byteLength;
-          this.stats.loading.first = performance.now();
-          this.stats.loading.end = performance.now();
-
-          if (callbacks.onSuccess) {
-            callbacks.onSuccess(
-              { url: context.url, data },
-              this.stats,
-              context,
-              null
-            );
-          }
-        })
-        .catch((err) => {
-          if (err.name === 'AbortError') return;
-          if (callbacks.onError) {
-            callbacks.onError(
-              { code: 0, text: err.message },
-              context,
-              null,
-              this.stats
-            );
-          }
-        });
+    destroy(): void {
+      this.abort();
+      this.context = null;
+      this.callbacks = null;
     }
-
-    getCacheAge(): number | null {
-      return null;
-    }
-
-    getResponseHeader(_name: string): string | null {
-      return null;
-    }
-  };
-}
-
-/**
- * Get the recommended HLS.js configuration for StreamPay.
- * Buffer limits match the N=3 segment / 12-second window.
- */
-export function getStreamPayHlsConfig(loaderClass: any) {
-  return {
-    fLoader: loaderClass,
-    maxBufferLength: 12, // seconds - matches 3 × 4s segments
-    maxMaxBufferLength: 24, // hard ceiling
-    maxBufferSize: 12 * 1000 * 1000, // 12 MB
-    startFragPrefetch: false,
-    fragLoadingMaxRetry: 3,
-    fragLoadingRetryDelay: 1000,
-    fragLoadingMaxRetryTimeout: 64000,
   };
 }
