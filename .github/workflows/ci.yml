@@ -102,6 +102,7 @@ jobs:
           SETTLEMENT=$(echo "$DEPLOY_OUT" | grep -oP 'Settlement: \K0x[0-9a-fA-F]+' || true)
           TOKEN=$(echo "$DEPLOY_OUT" | grep -oP 'Token: \K0x[0-9a-fA-F]+' || true)
           cd ..
+          cp contracts/deployment.json manifests/local.json 2>/dev/null || true
 
           if [ -z "$SETTLEMENT" ]; then
             echo "Failed to extract settlement address from deployment output"

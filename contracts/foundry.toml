@@ -11,8 +11,7 @@ evm_version = "cancun"
 via_ir = true
 ffi = false
 fs_permissions = [
-    { access = "read-write", path = "./" },
-    { access = "read-write", path = "../manifests" }
+    { access = "read-write", path = "./" }
 ]
 
 [rpc_endpoints]

@@ -65,8 +65,10 @@ contract Deploy is Script {
             "}\n"
         );
 
-        string memory filePath = chainId == 31337 ? "../manifests/local.json" : "../manifests/deployment.json";
+        string memory filePath = "deployment.json";
         vm.writeFile(filePath, json);
         console.log("Deployment artifact written to:", filePath);
+        console.log("DEPLOYMENT_ARTIFACT_JSON:");
+        console.log(json);
     }
 }

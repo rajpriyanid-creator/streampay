@@ -161,6 +161,7 @@ export async function openSession(p: {
   unitPrice: bigint; maxBillable: bigint; deposit: bigint;
   validSec: number; graceSec: number; maxLead: bigint;
   maxCreditWindow: bigint; maxCreditSegments: number; maxUnredeemedAmount: bigint;
+  nonce?: bigint;
 }) {
   const pc = pub(p.rpc);
   const payerWallet = wallet(p.rpc, p.payerKey);
@@ -168,6 +169,7 @@ export async function openSession(p: {
   const creator = privateKeyToAccount(p.creatorKey);
   const signer = privateKeyToAccount(p.signerKey);
   const now = BigInt(Math.floor(Date.now() / 1000));
+  const nonce = p.nonce !== undefined ? p.nonce : BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
 
   // Ensure ERC-20 allowance for settlement contract
   const allow = await pc.readContract({ address: p.token, abi: approveAbi, functionName: 'allowance', args: [payer, p.settlement] });
@@ -193,7 +195,7 @@ export async function openSession(p: {
     payer, sessionSigner: signer.address,
     offerDigest, initialDeposit: p.deposit,
     maxLeadUnits: p.maxLead, validUntil: now + BigInt(p.validSec),
-    redemptionGraceSeconds: BigInt(p.graceSec), nonce: now + 1n,
+    redemptionGraceSeconds: BigInt(p.graceSec), nonce,
   };
 
   const cfgDigest = await pc.readContract({ address: p.settlement, abi: hashConfigAbi, functionName: 'hashSessionConfig', args: [cfg] }) as Hex;
