@@ -896,7 +896,8 @@ contract StreamPaySettlementTest is Test {
 
         StreamPaySettlement.CloseAck memory ack = StreamPaySettlement.CloseAck({
             sessionId: sessionId,
-            finalCumulativeUnits: 60
+            cumulativeUnits: 60,
+            voucherDigest: vDigest
         });
         bytes32 ackDigest = badSettlement.hashCloseAck(ack);
         (uint8 v3, bytes32 r3, bytes32 s3) = vm.sign(CREATOR_KEY, ackDigest);
