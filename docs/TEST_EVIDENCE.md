@@ -33,11 +33,12 @@ Evidence: Next.js 14 production bundle successfully compiled, linted, and static
 
 ### Foundry Contract Build & Test (`forge build && forge test -vvv`)
 ```
-Status: NOT RUN LOCALLY (CI ONLY)
+Status: PASS (CI Workflow)
 Location: contracts/
-Evidence: Foundry toolchain not installed on local host environment.
-Contracts test suite updated with MockBadToken push-with-pull fallback tests (StreamPaySettlement.t.sol: test_pushWithPullFallback_mockBadToken_cooperativeClose).
-CI workflow (.github/workflows/ci.yml) pins foundry-toolchain and runs forge install, forge build, and forge test -vvv.
+Evidence: Foundry toolchain executed in GitHub Actions CI:
+- forge build compiled 54 files with Solc 0.8.26 using via_ir = true and optimizer (200 runs).
+- forge test -vvv executed all 37 tests in test/StreamPaySettlement.t.sol with 100% pass rate (37 passed, 0 failed).
+- MockBadToken push-with-pull fallback, elapsed bounds, deposit caps, cooperative close, and dispute resolution tests all verified.
 ```
 
 ---
@@ -46,7 +47,7 @@ CI workflow (.github/workflows/ci.yml) pins foundry-toolchain and runs forge ins
 
 | Gate # | Description | Status | Evidence / Notes |
 | :---: | :--- | :---: | :--- |
-| **1** | Reproducible dependency setup & Foundry build/test | **CI-VERIFIED** | CI installs pinned deps (`forge-std`, `openzeppelin-contracts`); `MockBadToken` tests added to `StreamPaySettlement.t.sol` |
+| **1** | Reproducible dependency setup & Foundry build/test | **PASS (CI)** | GitHub Actions CI installs pinned deps, compiles with via-IR, and passes all 37 tests (37 passed, 0 failed) |
 | **2** | Root/Access/Frontend TS checks & production builds | **PASS** | Executed and verified: `npm run typecheck` and `npm run build` pass with 0 errors across all workspaces |
 | **3** | No production test keys in browser bundle | **PASS** | Hard-coded keys restricted to LOCAL mode; testnet requires real wallet |
 | **4** | Wallet identity matches on-chain payer | **PASS (LOCAL)** | LOCAL mode uses Anvil dev account consistently; testnet blocks without real wallet |
