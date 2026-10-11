@@ -150,8 +150,9 @@ export function registerStores(stores: {
   activeVouchersMap = stores.vouchers;
   activeSessionsMap = stores.sessions;
 
-  // Restore on startup
+  // Restore legacy persisted state, then seed atomic replay-claim markers.
   restoreDurableState();
+  seedLegacyConsumedTokenClaims();
 }
 
 export interface LockInfo {
@@ -173,6 +174,166 @@ export function readDurableState(): FullDurableState | null {
   } catch (err: any) {
     console.error(`FATAL: Failed to read durable state from ${statePath}: ${err.message}`);
     throw new Error(`CRITICAL: Corrupted durable state at ${statePath}. Server failing closed to prevent replay vulnerabilities: ${err.message}`);
+  }
+}
+
+function getConsumedTokenClaimsDir(): string {
+  return path.join(config.DATA_STORE_DIR, 'consumed-token-claims');
+}
+
+function getConsumedTokenClaimPath(signature: string): string {
+  const key = crypto.createHash('sha256').update(signature).digest('hex');
+  return path.join(getConsumedTokenClaimsDir(), `${key}.json`);
+}
+
+/**
+ * Import previously consumed tokens from the durable map into per-signature,
+ * atomically-created claim files. This preserves replay protection when moving
+ * from the older state.json-only format to the shared claim ledger.
+ */
+function seedLegacyConsumedTokenClaims(): void {
+  if (!isPersistenceEnabled() || !activeConsumedMap) return;
+  const nowS = Math.floor(Date.now() / 1000);
+  const dir = getConsumedTokenClaimsDir();
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [signature, expiry] of activeConsumedMap.entries()) {
+    if (expiry < nowS) continue;
+    const claimPath = getConsumedTokenClaimPath(signature);
+    try {
+      const fd = fs.openSync(claimPath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, JSON.stringify({
+          version: 1,
+          expiry,
+          signatureHash: crypto.createHash('sha256').update(signature).digest('hex'),
+          claimedAt: Date.now(),
+        }));
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (err: any) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+  }
+}
+
+/**
+ * Authoritative cross-process replay lookup. A marker file's mere existence is
+ * a claim; malformed/incomplete markers fail closed rather than authorizing a
+ * potentially replayed token. The token's HMAC binds its expiry, so expired
+ * marker cleanup can never make the same token valid again.
+ */
+export function isConsumedTokenSignatureClaimed(signature: string, nowMs = Date.now()): boolean {
+  const nowS = Math.floor(nowMs / 1000);
+  const localExpiry = activeConsumedMap?.get(signature);
+  if (localExpiry !== undefined && localExpiry >= nowS) return true;
+  if (localExpiry !== undefined && localExpiry < nowS) activeConsumedMap?.delete(signature);
+  if (!isPersistenceEnabled()) return false;
+
+  const claimPath = getConsumedTokenClaimPath(signature);
+  if (fs.existsSync(claimPath)) return true;
+
+  // Compatibility fallback while a legacy state file is being migrated.
+  const statePath = getStateFilePath();
+  if (fs.existsSync(statePath)) {
+    let state: FullDurableState;
+    try {
+      state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as FullDurableState;
+    } catch (err: any) {
+      throw new Error(`Cannot safely inspect legacy replay state: ${err.message}`);
+    }
+    const expiry = state?.consumedTokens?.[signature];
+    if (typeof expiry === 'number' && expiry >= nowS) {
+      activeConsumedMap?.set(signature, expiry);
+      try {
+        fs.mkdirSync(getConsumedTokenClaimsDir(), { recursive: true });
+        const fd = fs.openSync(claimPath, 'wx', 0o600);
+        try {
+          fs.writeFileSync(fd, JSON.stringify({
+            version: 1,
+            expiry,
+            signatureHash: crypto.createHash('sha256').update(signature).digest('hex'),
+            claimedAt: Date.now(),
+          }));
+          fs.fsyncSync(fd);
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch (err: any) {
+        if (err.code !== 'EEXIST') throw err;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Atomically claims a token signature across cooperating processes on the same
+ * shared filesystem. open(..., 'wx') gives exactly one process the first-use
+ * claim. The caller MUST treat false as replay and any error as fail-closed.
+ * This is not distributed coordination for multiple hosts or filesystems.
+ */
+export function claimConsumedTokenSignature(signature: string, expiresAt: number, nowMs = Date.now()): boolean {
+  if (!signature || !Number.isFinite(expiresAt)) {
+    throw new Error('Invalid consumed-token claim');
+  }
+  const nowS = Math.floor(nowMs / 1000);
+  const localExpiry = activeConsumedMap?.get(signature);
+  if (localExpiry !== undefined && localExpiry >= nowS) return false;
+  if (localExpiry !== undefined && localExpiry < nowS) activeConsumedMap?.delete(signature);
+
+  if (!isPersistenceEnabled()) {
+    activeConsumedMap?.set(signature, expiresAt);
+    if (Math.random() < 0.01) pruneExpiredConsumedTokenClaims();
+    return true;
+  }
+
+  fs.mkdirSync(getConsumedTokenClaimsDir(), { recursive: true });
+  const claimPath = getConsumedTokenClaimPath(signature);
+  try {
+    const fd = fs.openSync(claimPath, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({
+        version: 1,
+        expiry: expiresAt,
+        signatureHash: crypto.createHash('sha256').update(signature).digest('hex'),
+        claimedAt: Date.now(),
+      }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    activeConsumedMap?.set(signature, expiresAt);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'EEXIST') return false;
+    throw new Error(`Cannot safely claim consumed token: ${err.message}`);
+  }
+}
+
+/**
+ * Periodically prunes expired claim files. A token cannot become valid again
+ * after its embedded expiry, so deleting an expired claim is safe even when
+ * two cleanup scans race. Malformed or partially written claims are retained.
+ */
+function pruneExpiredConsumedTokenClaims(): void {
+  if (!isPersistenceEnabled()) return;
+  const dir = getConsumedTokenClaimsDir();
+  if (!fs.existsSync(dir)) return;
+  const nowS = Math.floor(Date.now() / 1000);
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    const filePath = path.join(dir, name);
+    try {
+      const claim = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { expiry?: number };
+      if (typeof claim.expiry === 'number' && claim.expiry < nowS) {
+        fs.unlinkSync(filePath);
+      }
+    } catch {
+      // Fail closed for malformed marker files; manual investigation is safer.
+    }
   }
 }
 
@@ -601,6 +762,10 @@ export function clearDurableState(): void {
     const lockPath = getLockFilePath();
     if (fs.existsSync(lockPath)) {
       fs.unlinkSync(lockPath);
+    }
+    const claimsDir = getConsumedTokenClaimsDir();
+    if (fs.existsSync(claimsDir)) {
+      fs.rmSync(claimsDir, { recursive: true, force: true });
     }
   } catch (err: any) {
     console.warn(`Failed to clear durable state: ${err.message}`);
