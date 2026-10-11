@@ -561,18 +561,24 @@ async function runTests() {
       console.log(`  ✅ 6d: Lock timeout safely triggered after ${elapsed}ms on contested lock`);
     }
 
-    // Subtest 6e: Safe handling of corrupted/empty lock file older than grace period
+    // Subtest 6e: Corrupted/empty locks fail closed instead of age-based deletion
     {
       fs.writeFileSync(lockFile, ''); // 0-byte corrupt lock
       const twoSecsAgo = (Date.now() - 2000) / 1000;
       fs.utimesSync(lockFile, twoSecsAgo, twoSecsAgo);
 
-      const recoveredFromEmpty = acquireLock(2000, lockTestDir);
-      if (!fs.existsSync(lockFile)) {
-        throw new Error('FAILED: Lock file missing after empty lock recovery');
+      let failedClosed = false;
+      try {
+        acquireLock(300, lockTestDir);
+      } catch (err: any) {
+        failedClosed = err.message.includes('Timeout acquiring durable state lockfile');
       }
-      releaseLock(recoveredFromEmpty, lockTestDir);
-      console.log('  ✅ 6e: Empty/corrupted lock file older than grace period safely recovered');
+      if (!failedClosed || !fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Empty lock was reclaimed instead of failing closed');
+      }
+      fs.rmSync(lockTestDir, { recursive: true, force: true });
+      fs.mkdirSync(lockTestDir, { recursive: true });
+      console.log('  ✅ 6e: Empty/corrupted lock retained and acquisition failed closed');
     }
 
   } finally {

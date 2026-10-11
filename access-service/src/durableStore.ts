@@ -17,7 +17,7 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import { type Hex } from 'viem';
-import { config } from './config';
+import { config, validateRuntimeConfiguration } from './config';
 
 export interface PersistedLimits {
   maxCreditSegments: number;
@@ -31,6 +31,7 @@ export interface PersistedLimits {
 export interface PersistedReservationEntry {
   token: string;
   tokenSig: string;
+  voucherSignature: string;
   segmentIndex: number;
   cumulativeUnits: string;
   expiresAtMs: number;
@@ -82,10 +83,27 @@ let inMemorySecret: string | undefined;
 let activeConsumedMap: Map<string, number> | undefined;
 let activeVouchersMap: Map<string, any> | undefined;
 let activeSessionsMap: Map<string, any> | undefined;
+let heldLock: { key: string; lock: LockInfo } | undefined;
 
 export function isPersistenceEnabled(): boolean {
   const dir = process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
   return Boolean(dir && dir !== 'memory');
+}
+
+export function validatePersistenceConfiguration(): void {
+  validateRuntimeConfiguration();
+  if ((process.env.NODE_ENV === 'production' || config.NETWORK !== 'local') && !isPersistenceEnabled()) {
+    throw new Error('Fatal: durable replay persistence is unavailable.');
+  }
+  if (isPersistenceEnabled()) {
+    const dir = process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.R_OK | fs.constants.W_OK);
+    } catch (err: any) {
+      throw new Error(`Fatal: durable replay store is not usable at ${dir}: ${err.message}`);
+    }
+  }
 }
 
 export function getStateFilePath(overrideDir?: string): string {
@@ -232,21 +250,16 @@ export function tryRecoverAbandonedLock(lockPath: string, expectedOwnerToken?: s
     const raw = fs.readFileSync(recoveryTmp, 'utf8');
     const data = JSON.parse(raw) as LockPayload;
 
-    if (expectedOwnerToken && data.ownerToken !== expectedOwnerToken) {
-      // Race: another process acquired a replacement lock before rename! Put it back!
-      try {
-        fs.renameSync(recoveryTmp, lockPath);
-      } catch {
-        try { fs.unlinkSync(recoveryTmp); } catch {}
-      }
+    if (typeof data.ownerToken !== 'string' || typeof data.pid !== 'number' ||
+        typeof data.hostname !== 'string' || (expectedOwnerToken && data.ownerToken !== expectedOwnerToken)) {
+      // Never restore an isolated lock: a new owner may already have acquired
+      // the original path. An unverifiable lock is not safe to reclaim.
+      try { fs.unlinkSync(recoveryTmp); } catch {}
       return false;
     }
 
-    // Double check: if process is actually alive on this host, never steal it!
-    if (data.hostname === os.hostname() && isProcessAlive(data.pid)) {
-      try {
-        fs.renameSync(recoveryTmp, lockPath);
-      } catch {}
+    if (data.hostname !== os.hostname() || isProcessAlive(data.pid)) {
+      try { fs.unlinkSync(recoveryTmp); } catch {}
       return false;
     }
 
@@ -254,8 +267,10 @@ export function tryRecoverAbandonedLock(lockPath: string, expectedOwnerToken?: s
     fs.unlinkSync(recoveryTmp);
     return true;
   } catch {
-    try { fs.unlinkSync(recoveryTmp); } catch {}
-    return true;
+    // Empty, truncated, malformed, or unreadable locks have no safe owner
+    // decision. Fail closed; do not turn an inspection race into deletion.
+    // Keep the quarantined artifact so an operator can inspect/recover it.
+    return false;
   }
 }
 
@@ -348,11 +363,8 @@ export function acquireLock(timeoutMs = 5000, overrideDir?: string): LockInfo {
             // If process is alive: NEVER remove lock! Keep waiting.
           }
         } else {
-          // Corrupted / 0-byte lock file older than 1000ms
-          if (lockAgeMs >= 1000) {
-            tryRecoverAbandonedLock(lockPath);
-            continue;
-          }
+          // Unverifiable locks are retained until timeout. Age alone is not a
+          // proof that their owner is dead.
         }
 
         // Wait with backoff jitter (5-20ms)
@@ -397,7 +409,9 @@ export function releaseLock(lock: LockInfo, overrideDir?: string): void {
       if (releasedData.ownerToken === lock.ownerToken) {
         fs.unlinkSync(releaseTmp);
       } else {
-        try { fs.renameSync(releaseTmp, lockPath); } catch {}
+        // Never restore over a replacement owner. Leave the replacement in
+        // place and discard only our isolated old lock.
+        try { fs.unlinkSync(releaseTmp); } catch {}
       }
     } catch {}
   } catch {}
@@ -491,6 +505,7 @@ export function restoreDurableState(overrideDir?: string): boolean {
               resMap.set(sig, {
                 token: r.token,
                 tokenSig: r.tokenSig,
+                voucherSignature: r.voucherSignature || '',
                 segmentIndex: r.segmentIndex,
                 cumulativeUnits: BigInt(r.cumulativeUnits),
                 expiresAtMs: r.expiresAtMs,
@@ -594,6 +609,7 @@ function saveStateUnderLock(lock: LockInfo, overrideDir?: string): void {
           reservations[sig] = {
             token: r.token,
             tokenSig: r.tokenSig,
+            voucherSignature: r.voucherSignature || '',
             segmentIndex: r.segmentIndex,
             cumulativeUnits: r.cumulativeUnits.toString(),
             expiresAtMs: r.expiresAtMs,
@@ -700,10 +716,37 @@ export function saveAllDurableState(overrideDir?: string): void {
 
   const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
   fs.mkdirSync(dir, { recursive: true });
+  const key = path.resolve(dir);
+  if (heldLock?.key === key) {
+    saveStateUnderLock(heldLock.lock, overrideDir);
+    return;
+  }
   const lock = acquireLock(5000, overrideDir);
   try {
     saveStateUnderLock(lock, overrideDir);
   } finally {
+    releaseLock(lock, overrideDir);
+  }
+}
+
+/**
+ * Runs a state mutation while holding the shared lock for the entire
+ * read/validate/mutate/persist transaction. This is the cross-process
+ * boundary; the in-process SessionMutex alone is not sufficient.
+ */
+export async function withDurableStateLock<T>(fn: () => Promise<T> | T, overrideDir?: string): Promise<T> {
+  if (!isPersistenceEnabled()) return fn();
+  const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = acquireLock(5000, overrideDir);
+  const previous = heldLock;
+  heldLock = { key: path.resolve(dir), lock };
+  try {
+    restoreDurableState(overrideDir);
+    return await fn();
+  } finally {
+    saveStateUnderLock(lock, overrideDir);
+    heldLock = previous;
     releaseLock(lock, overrideDir);
   }
 }

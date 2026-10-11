@@ -23,7 +23,7 @@ import {
   voucherStoreMap,
   Voucher,
 } from './voucherStore';
-import { registerStores, getOrInitTokenSecret } from './durableStore';
+import { registerStores, getOrInitTokenSecret, validatePersistenceConfiguration } from './durableStore';
 
 registerStores({
   consumed: consumedTokensMap,
@@ -64,9 +64,19 @@ interface RateBucket {
 }
 const rateLimitStore = new Map<string, RateBucket>();
 
+function clientIp(req: Request): string {
+  const socketIp = req.socket.remoteAddress || '127.0.0.1';
+  const trustedHops = config.TRUSTED_PROXY_HOPS;
+  if (trustedHops <= 0) return socketIp;
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded !== 'string') return socketIp;
+  const chain = forwarded.split(',').map((v) => v.trim()).filter(Boolean);
+  return chain[Math.max(0, chain.length - trustedHops)] || socketIp;
+}
+
 export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
+    const rawIp = clientIp(req);
     const limit = (req.headers['x-test-rate-limit'] && (config.NETWORK === 'local' || process.env.NODE_ENV === 'test'))
       ? Number(req.headers['x-test-rate-limit'])
       : defaultLimit;
@@ -74,6 +84,17 @@ export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
     const refillRate = limit / 60000; // tokens per ms
     const clientKey = `${rawIp}`;
     const now = Date.now();
+
+    // Bound memory even when attackers rotate source addresses.
+    if (rateLimitStore.size > 10000) {
+      for (const [key, value] of rateLimitStore) {
+        if (now - value.lastRefill > 120000) rateLimitStore.delete(key);
+      }
+      if (rateLimitStore.size > 10000) {
+        const oldest = [...rateLimitStore.entries()].sort((a, b) => a[1].lastRefill - b[1].lastRefill).slice(0, rateLimitStore.size - 10000);
+        for (const [key] of oldest) rateLimitStore.delete(key);
+      }
+    }
 
     let bucket = rateLimitStore.get(clientKey);
     if (!bucket) {
@@ -466,7 +487,8 @@ app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Respons
       tokenSig,
       reqTtlSec,
       onChainSettledUnits,
-      reqNowMs
+      reqNowMs,
+      parsedVoucher.signature
     );
 
     if (!reserveCheck.allowed) {
@@ -572,8 +594,12 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
   // Delivery tracking: release / complete reservation on actual HTTP stream outcome
   res.on('finish', async () => {
     const outcome = await reservationLedger.onDeliveryCompleted(sessKey, tokenSig, segmentIndex);
-    if (outcome?.cumulativeUnits !== undefined) {
-      markVoucherDelivered(sessKey as Hex, outcome.cumulativeUnits);
+    if (outcome?.voucher) {
+      markVoucherDelivered(sessKey as Hex, {
+        sessionId: outcome.voucher.sessionId as Hex,
+        cumulativeUnits: outcome.voucher.cumulativeUnits,
+        signature: outcome.voucher.signature as Hex,
+      });
     }
   });
   res.on('close', () => {
@@ -658,6 +684,10 @@ app.get('/api/session/latest-voucher/:sessionId', requireAdmin, (req: Request, r
       ...stored.lastVoucher,
       cumulativeUnits: stored.lastVoucher.cumulativeUnits.toString(),
     },
+    lastDeliveredVoucher: stored.lastDeliveredVoucher ? {
+      ...stored.lastDeliveredVoucher,
+      cumulativeUnits: stored.lastDeliveredVoucher.cumulativeUnits.toString(),
+    } : null,
   });
 });
 
@@ -681,6 +711,7 @@ app.listen(config.PORT, async () => {
     process.exit(1);
   }
   try {
+    validatePersistenceConfiguration();
     getOrInitTokenSecret();
   } catch (err: any) {
     console.error(`⛔ ${err.message}`);

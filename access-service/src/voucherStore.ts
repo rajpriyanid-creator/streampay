@@ -160,19 +160,21 @@ export function updateSessionVoucher(
 /**
  * Marks voucher delivery as completed upon successful HTTP content delivery.
  */
-export function markVoucherDelivered(sessionId: Hex, cumulativeUnits: bigint): void {
+export function markVoucherDelivered(sessionId: Hex, voucher: Voucher): void {
   syncFromDisk();
   const key = sessionId.toLowerCase();
   const existing = voucherStore.get(key);
-  if (existing) {
-    if (cumulativeUnits > existing.deliveredCumulativeUnits) {
-      existing.deliveredCumulativeUnits = cumulativeUnits;
-    }
-    existing.lastDeliveredVoucher = existing.lastVoucher;
-    existing.totalServedSegments += 1;
-    existing.lastUpdated = Date.now();
-    saveAllDurableState();
-  }
+  if (!existing || voucher.sessionId.toLowerCase() !== key) return;
+  // The reservation supplies the exact voucher that was delivered. Never copy
+  // existing.lastVoucher: a newer concurrent request may have replaced it.
+  if (voucher.cumulativeUnits < existing.deliveredCumulativeUnits) return;
+  if (voucher.cumulativeUnits === existing.deliveredCumulativeUnits &&
+      existing.lastDeliveredVoucher?.signature.toLowerCase() === voucher.signature.toLowerCase()) return;
+  existing.deliveredCumulativeUnits = voucher.cumulativeUnits;
+  existing.lastDeliveredVoucher = { ...voucher };
+  existing.totalServedSegments += 1;
+  existing.lastUpdated = Date.now();
+  saveAllDurableState();
 }
 
 /**
