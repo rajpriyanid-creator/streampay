@@ -82,7 +82,10 @@ export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
       : defaultLimit;
 
     const refillRate = limit / 60000; // tokens per ms
-    const clientKey = `${rawIp}`;
+    // Keep explicitly test-scoped limits isolated from the production bucket
+    // for the same socket. Testing controls are unavailable outside local/test
+    // mode and therefore cannot partition production traffic.
+    const clientKey = `${rawIp}:${limit}`;
     const now = Date.now();
 
     // Bound memory even when attackers rotate source addresses.
