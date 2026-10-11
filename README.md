@@ -146,7 +146,7 @@ npm run build
 
 ## How to deploy to Monad Testnet
 
-Deployment is intentionally not performed by CI or this repository workflow. After independently verifying the contract, export `DEPLOYER_PRIVATE_KEY` in the shell without printing it, then run:
+Deployment is intentionally not performed by CI or this repository workflow. After independently verifying the contract, export `PRIVATE_KEY` in the shell without printing it, then run:
 
 ```bash
 bash scripts/deploy-testnet.sh

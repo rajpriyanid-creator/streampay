@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DEPLOYER_PRIVATE_KEY:?Set DEPLOYER_PRIVATE_KEY in the environment; it is never written or printed}"
+: "${PRIVATE_KEY:?Set PRIVATE_KEY in the environment; it is never written or printed}"
 export PAYMENT_TOKEN="${PAYMENT_TOKEN:-0x534b2f3A21130d7a60830c2Df862319e593943A3}"
 RPC_URL="https://testnet-rpc.monad.xyz"
 EXPECTED_TOKEN="0x534b2f3A21130d7a60830c2Df862319e593943A3"
@@ -12,7 +12,7 @@ if [[ "$PAYMENT_TOKEN" != "$EXPECTED_TOKEN" ]]; then
 fi
 
 forge script contracts/script/Deploy.s.sol:Deploy \
-  --rpc-url "$RPC_URL" --broadcast --private-key "$DEPLOYER_PRIVATE_KEY"
+  --rpc-url "$RPC_URL" --broadcast --private-key "$PRIVATE_KEY"
 
 RUN_FILE="contracts/broadcast/Deploy.s.sol/10143/run-latest.json"
 [[ -f "$RUN_FILE" ]] || { echo "Deployment broadcast artifact not found" >&2; exit 1; }
