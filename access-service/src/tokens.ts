@@ -120,7 +120,13 @@ export function consumeAccessToken(
   }
 
   // Step 5: Atomically verify unconsumed status and record consumption across instances
-  const consumedOk = tryAtomicConsumeToken(sig, payload.exp, nowS);
+  let consumedOk: boolean;
+  try {
+    consumedOk = tryAtomicConsumeToken(sig, payload.exp, nowS);
+  } catch (err: any) {
+    console.error(`FATAL: Durable replay protection failed during token consumption: ${err.message}`);
+    return { valid: false, reason: `Durable replay protection failure: ${err.message}` };
+  }
   if (!consumedOk) {
     return { valid: false, reason: 'Access token already consumed (replay prevented)' };
   }

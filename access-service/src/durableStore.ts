@@ -15,6 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { type Hex } from 'viem';
 import { config } from './config';
 
@@ -83,11 +84,13 @@ let activeVouchersMap: Map<string, any> | undefined;
 let activeSessionsMap: Map<string, any> | undefined;
 
 export function isPersistenceEnabled(): boolean {
-  return Boolean(config.DATA_STORE_DIR && config.DATA_STORE_DIR !== 'memory');
+  const dir = process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  return Boolean(dir && dir !== 'memory');
 }
 
-export function getStateFilePath(): string {
-  return path.join(config.DATA_STORE_DIR, 'state.json');
+export function getStateFilePath(overrideDir?: string): string {
+  const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  return path.join(dir, 'state.json');
 }
 
 /**
@@ -118,8 +121,9 @@ export function getOrInitTokenSecret(): string {
   // Local development persistence
   if (isPersistenceEnabled()) {
     try {
-      fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
-      const secretFile = path.join(config.DATA_STORE_DIR, 'token-secret.key');
+      const dir = process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+      fs.mkdirSync(dir, { recursive: true });
+      const secretFile = path.join(dir, 'token-secret.key');
       if (fs.existsSync(secretFile)) {
         const stored = fs.readFileSync(secretFile, 'utf8').trim();
         if (stored.length >= 32) return stored;
@@ -154,18 +158,114 @@ export function registerStores(stores: {
   restoreDurableState();
 }
 
+export interface LockPayload {
+  ownerToken: string;
+  pid: number;
+  hostname: string;
+  acquiredAt: number;
+}
+
 export interface LockInfo {
   fd: number;
-  owner: string;
+  owner: string;      // Backwards-compatible alias for ownerToken
+  ownerToken: string;
+  acquiredAt: number;
+  pid: number;
+  hostname: string;
+}
+
+/**
+ * Checks whether a process with the given PID is currently alive on this host.
+ * Uses process.kill(pid, 0) which tests for process existence without sending a signal.
+ * - Returns true if the process exists (owned by current user or EPERM).
+ * - Returns false only if the OS returns ESRCH (no such process).
+ */
+export function isProcessAlive(pid: number): boolean {
+  if (typeof pid !== 'number' || isNaN(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'ESRCH') {
+      return false; // Process definitively does not exist
+    }
+    return true; // EPERM means process exists but owned by another user -> alive
+  }
+}
+
+/**
+ * Safely reads the lockfile payload if available.
+ */
+export function readLockPayload(lockPath: string): { payload: LockPayload | null; mtimeMs: number } {
+  try {
+    const stat = fs.statSync(lockPath);
+    const raw = fs.readFileSync(lockPath, 'utf8');
+    if (!raw.trim()) {
+      return { payload: null, mtimeMs: stat.mtimeMs };
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.ownerToken === 'string' && typeof parsed.pid === 'number') {
+      return { payload: parsed as LockPayload, mtimeMs: stat.mtimeMs };
+    }
+    return { payload: null, mtimeMs: stat.mtimeMs };
+  } catch {
+    return { payload: null, mtimeMs: 0 };
+  }
+}
+
+/**
+ * Safely recovers an abandoned lock using atomic directory rename (CAS rename).
+ * Isolates the candidate lock file to a unique recovery path before unlinking it,
+ * verifying that the isolated file still matches the expected abandoned ownerToken.
+ * This guarantees that a newly acquired lock belonging to another process can NEVER
+ * be accidentally deleted between inspection and removal.
+ */
+export function tryRecoverAbandonedLock(lockPath: string, expectedOwnerToken?: string): boolean {
+  const recoveryTmp = `${lockPath}.recover.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.renameSync(lockPath, recoveryTmp);
+  } catch {
+    return false; // Another process already intervened
+  }
+
+  try {
+    const raw = fs.readFileSync(recoveryTmp, 'utf8');
+    const data = JSON.parse(raw) as LockPayload;
+
+    if (expectedOwnerToken && data.ownerToken !== expectedOwnerToken) {
+      // Race: another process acquired a replacement lock before rename! Put it back!
+      try {
+        fs.renameSync(recoveryTmp, lockPath);
+      } catch {
+        try { fs.unlinkSync(recoveryTmp); } catch {}
+      }
+      return false;
+    }
+
+    // Double check: if process is actually alive on this host, never steal it!
+    if (data.hostname === os.hostname() && isProcessAlive(data.pid)) {
+      try {
+        fs.renameSync(recoveryTmp, lockPath);
+      } catch {}
+      return false;
+    }
+
+    // Confirmed abandoned lock. Safely remove isolated file.
+    fs.unlinkSync(recoveryTmp);
+    return true;
+  } catch {
+    try { fs.unlinkSync(recoveryTmp); } catch {}
+    return true;
+  }
 }
 
 /**
  * Reads persisted state from disk.
  * Throws on corrupted or unreadable state file to fail closed against replay attacks.
  */
-export function readDurableState(): FullDurableState | null {
+export function readDurableState(overrideDir?: string): FullDurableState | null {
   if (!isPersistenceEnabled()) return null;
-  const statePath = getStateFilePath();
+  const statePath = getStateFilePath(overrideDir);
   if (!fs.existsSync(statePath)) return null;
   try {
     const raw = fs.readFileSync(statePath, 'utf8');
@@ -176,54 +276,130 @@ export function readDurableState(): FullDurableState | null {
   }
 }
 
-function getLockFilePath(): string {
-  return path.join(config.DATA_STORE_DIR, 'state.json.lock');
+export function getLockFilePath(overrideDir?: string): string {
+  const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  return path.join(dir, 'state.json.lock');
 }
 
-export function acquireLock(timeoutMs = 5000): LockInfo {
-  const lockPath = getLockFilePath();
-  const owner = `${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+/**
+ * Acquires exclusive filesystem advisory lock for state file operations.
+ *
+ * Guarantees:
+ * 1. Never removes a lock belonging to a process that is still alive on this host.
+ * 2. Only recovers abandoned locks whose PID is confirmed dead (ESRCH) after minimum age.
+ * 3. Uses atomic CAS directory rename to isolate candidate lockfiles before removal.
+ * 4. Stores unique ownerToken, pid, hostname, and acquiredAt in lock payload.
+ *
+ * ARCHITECTURAL NOTE: Filesystem locking relies on atomic OS kernel directory entries
+ * (O_CREAT | O_EXCL via 'wx' flag). This coordinates multiple processes on the same host
+ * or shared container volume with common PID namespace. It is NOT automatically a distributed
+ * lock across independent physical hosts or decoupled cloud containers without a distributed
+ * coordinator (e.g. Redis Redlock or Postgres advisory locks).
+ */
+export function acquireLock(timeoutMs = 5000, overrideDir?: string): LockInfo {
+  const lockPath = getLockFilePath(overrideDir);
+  const ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(12).toString('hex')}`;
+  const myHostname = os.hostname();
   const start = Date.now();
+
+  const payload: LockPayload = {
+    ownerToken,
+    pid: process.pid,
+    hostname: myHostname,
+    acquiredAt: Date.now(),
+  };
+  const payloadStr = JSON.stringify(payload);
+
   while (Date.now() - start < timeoutMs) {
     try {
       const fd = fs.openSync(lockPath, 'wx');
       try {
-        fs.writeFileSync(fd, owner, 'utf8');
-      } catch {}
-      return { fd, owner };
+        fs.writeSync(fd, payloadStr, 0, 'utf8');
+        fs.fsyncSync(fd);
+      } catch (writeErr) {
+        try { fs.closeSync(fd); } catch {}
+        try { fs.unlinkSync(lockPath); } catch {}
+        throw writeErr;
+      }
+      return {
+        fd,
+        owner: ownerToken,
+        ownerToken,
+        acquiredAt: payload.acquiredAt,
+        pid: process.pid,
+        hostname: myHostname,
+      };
     } catch (err: any) {
       if (err.code === 'EEXIST') {
-        try {
-          const stat = fs.statSync(lockPath);
-          if (Date.now() - stat.mtimeMs > 5000) {
-            try {
-              fs.unlinkSync(lockPath);
-            } catch {}
+        const { payload: currentLock, mtimeMs } = readLockPayload(lockPath);
+        const lockAgeMs = Date.now() - mtimeMs;
+
+        if (currentLock) {
+          // Same host verification
+          if (currentLock.hostname === myHostname) {
+            // Check process liveness
+            if (!isProcessAlive(currentLock.pid)) {
+              // Owning process is dead (ESRCH)
+              if (lockAgeMs >= 500) {
+                tryRecoverAbandonedLock(lockPath, currentLock.ownerToken);
+                continue; // Retry acquire immediately
+              }
+            }
+            // If process is alive: NEVER remove lock! Keep waiting.
+          }
+        } else {
+          // Corrupted / 0-byte lock file older than 1000ms
+          if (lockAgeMs >= 1000) {
+            tryRecoverAbandonedLock(lockPath);
             continue;
           }
-        } catch {}
-        const end = Date.now() + 5;
+        }
+
+        // Wait with backoff jitter (5-20ms)
+        const sleepMs = Math.min(25, 5 + Math.floor(Math.random() * 15));
+        const end = Date.now() + sleepMs;
         while (Date.now() < end) {}
       } else {
         throw err;
       }
     }
   }
-  throw new Error(`Timeout acquiring durable state lockfile: ${lockPath}`);
+
+  throw new Error(`Timeout acquiring durable state lockfile after ${timeoutMs}ms: ${lockPath}`);
 }
 
-export function releaseLock(lock: LockInfo): void {
-  const lockPath = getLockFilePath();
+/**
+ * Releases the exclusive lockfile.
+ * Validates ownership using atomic rename isolation to ensure that a former owner
+ * can NEVER accidentally delete a replacement owner's lockfile.
+ */
+export function releaseLock(lock: LockInfo, overrideDir?: string): void {
+  const lockPath = getLockFilePath(overrideDir);
   try {
     fs.closeSync(lock.fd);
   } catch {}
+
   try {
-    if (fs.existsSync(lockPath)) {
-      const currentOwner = fs.readFileSync(lockPath, 'utf8').trim();
-      if (currentOwner === lock.owner) {
-        fs.unlinkSync(lockPath);
-      }
+    if (!fs.existsSync(lockPath)) return;
+
+    const raw = fs.readFileSync(lockPath, 'utf8');
+    const data = JSON.parse(raw) as LockPayload;
+    if (data.ownerToken !== lock.ownerToken) {
+      // Lock has been acquired by someone else (not ours). NEVER touch!
+      return;
     }
+
+    const releaseTmp = `${lockPath}.released.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, releaseTmp);
+      const releasedRaw = fs.readFileSync(releaseTmp, 'utf8');
+      const releasedData = JSON.parse(releasedRaw) as LockPayload;
+      if (releasedData.ownerToken === lock.ownerToken) {
+        fs.unlinkSync(releaseTmp);
+      } else {
+        try { fs.renameSync(releaseTmp, lockPath); } catch {}
+      }
+    } catch {}
   } catch {}
 }
 
@@ -231,11 +407,11 @@ export function releaseLock(lock: LockInfo): void {
  * Atomically writes full state to disk using a unique temporary file then rename.
  * Throws on failure to ensure persistence errors are never silently masked.
  */
-export function writeDurableState(state: FullDurableState): void {
+export function writeDurableState(state: FullDurableState, overrideDir?: string): void {
   if (!isPersistenceEnabled()) return;
-  const targetPath = getStateFilePath();
+  const targetPath = getStateFilePath(overrideDir);
   try {
-    fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
     fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), { encoding: 'utf8' });
     fs.renameSync(tmpPath, targetPath);
@@ -253,9 +429,9 @@ let lastLoadedMtimeMs = 0;
 /**
  * Restores state from disk into active in-memory stores.
  */
-export function restoreDurableState(): boolean {
+export function restoreDurableState(overrideDir?: string): boolean {
   if (!isPersistenceEnabled()) return false;
-  const statePath = getStateFilePath();
+  const statePath = getStateFilePath(overrideDir);
   try {
     if (!fs.existsSync(statePath)) return false;
     const stat = fs.statSync(statePath);
@@ -362,7 +538,7 @@ export function restoreDurableState(): boolean {
 /**
  * Serializes and writes state while holding the process lockfile.
  */
-function saveStateUnderLock(lock: LockInfo): void {
+function saveStateUnderLock(lock: LockInfo, overrideDir?: string): void {
   const nowS = Math.floor(Date.now() / 1000);
   const nowMs = Date.now();
 
@@ -453,7 +629,7 @@ function saveStateUnderLock(lock: LockInfo): void {
   }
 
   // 4. Merge disk state to prevent lost updates from concurrent writers
-  const diskState = readDurableState();
+  const diskState = readDurableState(overrideDir);
   if (diskState) {
     if (diskState.consumedTokens) {
       for (const [sig, exp] of Object.entries(diskState.consumedTokens)) {
@@ -511,7 +687,7 @@ function saveStateUnderLock(lock: LockInfo): void {
     sessions,
   };
 
-  writeDurableState(payload);
+  writeDurableState(payload, overrideDir);
 }
 
 /**
@@ -519,15 +695,16 @@ function saveStateUnderLock(lock: LockInfo): void {
  * Uses lockfile coordination and merges with existing disk state to prevent
  * lost updates under concurrent multi-process writes.
  */
-export function saveAllDurableState(): void {
+export function saveAllDurableState(overrideDir?: string): void {
   if (!isPersistenceEnabled()) return;
 
-  fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
-  const lock = acquireLock();
+  const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = acquireLock(5000, overrideDir);
   try {
-    saveStateUnderLock(lock);
+    saveStateUnderLock(lock, overrideDir);
   } finally {
-    releaseLock(lock);
+    releaseLock(lock, overrideDir);
   }
 }
 
@@ -541,7 +718,8 @@ export function saveAllDurableState(): void {
 export function tryAtomicConsumeToken(
   sig: string,
   exp: number,
-  nowS = Math.floor(Date.now() / 1000)
+  nowS = Math.floor(Date.now() / 1000),
+  overrideDir?: string
 ): boolean {
   if (!isPersistenceEnabled()) {
     if (activeConsumedMap?.has(sig)) return false;
@@ -549,11 +727,12 @@ export function tryAtomicConsumeToken(
     return true;
   }
 
-  fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
-  const lock = acquireLock();
+  const dir = overrideDir || process.env.DATA_STORE_DIR || config.DATA_STORE_DIR;
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = acquireLock(5000, overrideDir);
   try {
     // 1. Check disk state
-    const diskState = readDurableState();
+    const diskState = readDurableState(overrideDir);
     if (diskState?.consumedTokens && diskState.consumedTokens[sig] && diskState.consumedTokens[sig] >= nowS) {
       if (activeConsumedMap) activeConsumedMap.set(sig, diskState.consumedTokens[sig]);
       return false; // Already consumed on disk
@@ -573,32 +752,32 @@ export function tryAtomicConsumeToken(
     }
 
     // 4. Save state to disk under this lock
-    saveStateUnderLock(lock);
+    saveStateUnderLock(lock, overrideDir);
     return true;
   } finally {
-    releaseLock(lock);
+    releaseLock(lock, overrideDir);
   }
 }
 
 /**
  * Reloads state from disk if newer changes exist (for replica synchronization).
  */
-export function syncFromDisk(): void {
+export function syncFromDisk(overrideDir?: string): void {
   if (!isPersistenceEnabled()) return;
-  restoreDurableState();
+  restoreDurableState(overrideDir);
 }
 
 /**
  * Clear persisted state (for testing).
  */
-export function clearDurableState(): void {
+export function clearDurableState(overrideDir?: string): void {
   if (!isPersistenceEnabled()) return;
   try {
-    const targetPath = getStateFilePath();
+    const targetPath = getStateFilePath(overrideDir);
     if (fs.existsSync(targetPath)) {
       fs.unlinkSync(targetPath);
     }
-    const lockPath = getLockFilePath();
+    const lockPath = getLockFilePath(overrideDir);
     if (fs.existsSync(lockPath)) {
       fs.unlinkSync(lockPath);
     }

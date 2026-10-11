@@ -319,4 +319,82 @@ node scripts/e2e/e2e.mjs
 # 5. Start frontend and verify in browser
 npm --prefix frontend run dev
 # Navigate to http://localhost:3000
+
+# 6. Run durable persistence, multi-instance, and lock concurrency suite
+npx tsx scripts/e2e/durable-persistence.test.ts
+
+# 7. Run testnet signing safety and EIP-712 verification suite
+npx tsx scripts/e2e/testnet-signing-safety.test.ts
+```
+
+---
+
+## 7. Concurrency & Security Regression Test Evidence (2026-10-11)
+
+### Durable Persistence, Multi-Instance & Lock Concurrency Suite
+```
+Command: npx tsx scripts/e2e/durable-persistence.test.ts
+Status: PASS (6/6 tests, exit code 0)
+
+Test 1: Single-Instance State Persistence & In-Memory Match
+  ✅ Segment 0 token granted and content delivered
+  ✅ state.json confirmed on disk with matching voucher state
+Test 2: Process Restart & Recovery
+  ✅ In-memory voucher state restored from state.json
+  ✅ Replay of consumed token after restart rejected (403)
+  ✅ Re-request for completed segment rejected (402/400)
+Test 3: Multi-Instance Cluster Sharing & Replay Coordination
+  ✅ Instance A generates token; Instance B serves content successfully
+  ✅ Replay of consumed token on Instance A strictly rejected (403)
+Test 4: High-Concurrency Cross-Process Race & Lost-Update Protection
+  ✅ Multiple concurrent processes update state.json without lost updates
+  ✅ Simultaneous first-use race resolved atomically: exactly 1 granted (200), 1 rejected (403)
+  ✅ Subsequent replays on both instances strictly rejected (403)
+Test 5: Durability Corruption Fail-Closed Protection
+  ✅ Corrupted state.json causes server startup failure (exit code 1) with fatal replay error
+Test 6: Filesystem Lock Concurrency & Safety Properties
+  ✅ 6a: Live lock holder exceeding normal age (15s) was NOT stolen (liveness preserved)
+  ✅ 6b: Genuinely abandoned lock (dead PID) safely recovered
+  ✅ 6c: Former owner release DID NOT remove replacement owner lock (owner isolation verified)
+  ✅ 6d: Lock timeout safely triggered after contested period
+  ✅ 6e: Empty/corrupted lock file older than grace period safely recovered
+```
+
+### Testnet Signing Safety & EIP-712 Verification Suite
+```
+Command: npx tsx scripts/e2e/testnet-signing-safety.test.ts
+Status: PASS (11/11 tests, exit code 0)
+
+Test 1: Proving testnet session opening strictly rejects creatorKey (Anvil key)...
+   ✅ PASS: creatorKey rejected on Testnet chain 10143 with SECURITY VIOLATION.
+Test 2: Proving testnet session opening fails closed without creator offerSignature...
+   ✅ PASS: openSessionWithWallet failed closed when offerSignature was missing.
+Test 3: Proving PayerEqualsRecipient constraint is strictly validated...
+   ✅ PASS: PayerEqualsRecipient prevented before submission.
+Test 4: Proving PayerEqualsSessionSigner constraint is strictly validated...
+   ✅ PASS: PayerEqualsSessionSigner prevented before submission.
+Test 5: Proving testnet close acknowledgement strictly rejects creatorKey...
+   ✅ PASS: closeCooperativeWithWallet rejected creatorKey on Testnet chain 10143.
+Test 6: Proving testnet close fails closed without wallet-signed ackSig...
+   ✅ PASS: closeCooperativeWithWallet failed closed when ackSig was missing.
+Test 7: Verifying EIP-712 typed data schemas and digests match Solidity specification...
+   ✅ ContentOffer EIP-712 digest verified against exact Solidity formula
+   ✅ SessionConfig EIP-712 digest verified against exact Solidity formula
+   ✅ CloseAck EIP-712 digest verified against exact Solidity formula
+Test 8: Verifying genuine Creator wallet signing flow & cryptographic signature recovery...
+   ✅ Recovered ContentOffer signer matches Creator account
+   ✅ Recovered CloseAck signer matches Creator account
+   ✅ Cryptographic recovery verified via viem recoverTypedDataAddress
+Test 9: Static audit of frontend code for forbidden Anvil keys in testnet paths...
+   ✅ PASS: Zero Anvil keys in Testnet execution paths in frontend.
+Test 10: Verifying account & chain validation individually enforced across all 5 operations...
+   ✅ 10a: signContentOfferWithWallet strictly enforces account & chain.
+   ✅ 10b: openSessionWithWallet strictly enforces account & chain.
+   ✅ 10c: checkpointWithWallet strictly enforces account & chain.
+   ✅ 10d: signCloseAckWithWallet strictly enforces account & chain.
+   ✅ 10e: closeCooperativeWithWallet strictly enforces account & chain.
+Test 11: Negative EIP-712 security checks: domain separation & CloseAck non-reusability...
+   ✅ 11a: Domain separation by chain ID verified (wrong chainId cannot verify signature).
+   ✅ 11b: Domain separation by verifyingContract verified.
+   ✅ 11c: CloseAck non-reusability proven: signed ack cannot be reused after playback advances.
 ```

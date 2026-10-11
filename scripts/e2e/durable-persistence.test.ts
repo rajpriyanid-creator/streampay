@@ -14,6 +14,13 @@ import fs from 'fs';
 import os from 'os';
 import { privateKeyToAccount } from 'viem/accounts';
 import { type Hex } from 'viem';
+import {
+  acquireLock,
+  releaseLock,
+  isProcessAlive,
+  readLockPayload,
+  type LockPayload,
+} from '../../access-service/dist/durableStore';
 
 const TEST_DIR = path.join(__dirname, '../../.test-durable-data');
 const PORT_A = 4071;
@@ -428,7 +435,151 @@ async function runTests() {
   }
   console.log(`  ✅ Corrupted state.json caused server to fail closed (exit code ${exitCode}) with fatal replay-protection error`);
 
-  console.log('\n🎉 ALL Durable Persistence & Multi-Instance Tests PASSED!\n');
+  // ────────────────────────────────────────────────────────────────
+  // TEST 6: Rigorous Filesystem Lock Concurrency & Safety Properties
+  // ────────────────────────────────────────────────────────────────
+  console.log('\nTest 6: Rigorous unit verification of filesystem lock concurrency properties...');
+  const lockTestDir = path.join(os.tmpdir(), `streampay-lock-test-${Date.now()}`);
+  fs.mkdirSync(lockTestDir, { recursive: true });
+  process.env.DATA_STORE_DIR = lockTestDir;
+
+  try {
+    const lockFile = path.join(lockTestDir, 'state.json.lock');
+
+    // Subtest 6a: Live lock holder exceeding normal stale-lock age MUST NOT have lock stolen
+    {
+      const liveLock = acquireLock(2000, lockTestDir);
+      // Simulate that the lock file is old (e.g. 15 seconds old)
+      const fifteenSecsAgo = (Date.now() - 15000) / 1000;
+      fs.utimesSync(lockFile, fifteenSecsAgo, fifteenSecsAgo);
+
+      // Attempt to acquire from another caller with short timeout (300ms)
+      let theftPrevented = false;
+      try {
+        acquireLock(300, lockTestDir);
+      } catch (err: any) {
+        theftPrevented = err.message.includes('Timeout acquiring durable state lockfile');
+      }
+      if (!theftPrevented) {
+        throw new Error('FAILED: Lock held by a live process was stolen after exceeding normal age!');
+      }
+
+      // Verify original lock still intact with original ownerToken
+      const current = readLockPayload(lockFile);
+      if (current.payload?.ownerToken !== liveLock.ownerToken) {
+        throw new Error('FAILED: Lock file content altered while held by living process!');
+      }
+
+      releaseLock(liveLock, lockTestDir);
+      if (fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Lock file was not released cleanly by live owner!');
+      }
+      console.log('  ✅ 6a: Live lock holder exceeding normal age (15s) was NOT stolen (liveness preserved)');
+    }
+
+    // Subtest 6b: Genuinely abandoned lock (dead PID) is safely recovered
+    {
+      // Pick a PID that does not exist
+      let deadPid = 999999;
+      while (isProcessAlive(deadPid)) {
+        deadPid++;
+      }
+      const abandonedPayload: LockPayload = {
+        ownerToken: `dead-${deadPid}-${Date.now()}`,
+        pid: deadPid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now() - 5000,
+      };
+      fs.writeFileSync(lockFile, JSON.stringify(abandonedPayload), 'utf8');
+      const twoSecsAgo = (Date.now() - 2000) / 1000;
+      fs.utimesSync(lockFile, twoSecsAgo, twoSecsAgo);
+
+      // acquireLock should detect dead PID (ESRCH), recover the abandoned lock, and acquire
+      const recoveredLock = acquireLock(2000, lockTestDir);
+      if (recoveredLock.ownerToken === abandonedPayload.ownerToken) {
+        throw new Error('FAILED: Acquired lock had old dead ownerToken!');
+      }
+      const newPayload = readLockPayload(lockFile);
+      if (newPayload.payload?.ownerToken !== recoveredLock.ownerToken) {
+        throw new Error('FAILED: Lock file does not contain newly acquired ownerToken!');
+      }
+
+      releaseLock(recoveredLock, lockTestDir);
+      console.log('  ✅ 6b: Genuinely abandoned lock (dead PID) was safely recovered');
+    }
+
+    // Subtest 6c: A former owner cannot remove a replacement owner's lock during release
+    {
+      // Process acquires lock 1
+      const lock1 = acquireLock(2000, lockTestDir);
+
+      // Simulate that another process has acquired lock 2 (e.g. different owner token)
+      const replacementPayload: LockPayload = {
+        ownerToken: `replacement-owner-${Date.now()}`,
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now(),
+      };
+      // Overwrite lock file to simulate replacement lock
+      fs.writeFileSync(lockFile, JSON.stringify(replacementPayload), 'utf8');
+
+      // Now lock1 is released by former owner
+      releaseLock(lock1, lockTestDir);
+
+      // Verify replacement lock is STILL on disk untouched!
+      if (!fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Former owner deleted replacement owner lock file during release!');
+      }
+      const checkReplacement = readLockPayload(lockFile);
+      if (checkReplacement.payload?.ownerToken !== replacementPayload.ownerToken) {
+        throw new Error('FAILED: Replacement owner lock was corrupted during former owner release!');
+      }
+
+      // Cleanup simulated replacement lock
+      fs.unlinkSync(lockFile);
+      console.log('  ✅ 6c: Former owner release DID NOT remove replacement owner lock (owner isolation verified)');
+    }
+
+    // Subtest 6d: Timeout handling on contested lock
+    {
+      const lockHolder = acquireLock(2000, lockTestDir);
+      let timedOut = false;
+      const tStart = Date.now();
+      try {
+        acquireLock(200, lockTestDir); // 200ms timeout
+      } catch (err: any) {
+        timedOut = err.message.includes('Timeout acquiring durable state lockfile');
+      }
+      const elapsed = Date.now() - tStart;
+      if (!timedOut) {
+        throw new Error('FAILED: Contested lock did not time out as expected');
+      }
+      if (elapsed < 180) {
+        throw new Error(`FAILED: Timeout fired prematurely (${elapsed}ms < 180ms)`);
+      }
+      releaseLock(lockHolder, lockTestDir);
+      console.log(`  ✅ 6d: Lock timeout safely triggered after ${elapsed}ms on contested lock`);
+    }
+
+    // Subtest 6e: Safe handling of corrupted/empty lock file older than grace period
+    {
+      fs.writeFileSync(lockFile, ''); // 0-byte corrupt lock
+      const twoSecsAgo = (Date.now() - 2000) / 1000;
+      fs.utimesSync(lockFile, twoSecsAgo, twoSecsAgo);
+
+      const recoveredFromEmpty = acquireLock(2000, lockTestDir);
+      if (!fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Lock file missing after empty lock recovery');
+      }
+      releaseLock(recoveredFromEmpty, lockTestDir);
+      console.log('  ✅ 6e: Empty/corrupted lock file older than grace period safely recovered');
+    }
+
+  } finally {
+    fs.rmSync(lockTestDir, { recursive: true, force: true });
+  }
+
+  console.log('\n🎉 ALL Durable Persistence, Multi-Instance & Lock Concurrency Tests PASSED!\n');
 }
 
 runTests().catch((err) => {

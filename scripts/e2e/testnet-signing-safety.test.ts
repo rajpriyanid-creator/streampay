@@ -37,6 +37,7 @@ import {
   signContentOfferWithWallet,
   signCloseAckWithWallet,
   openSessionWithWallet,
+  checkpointWithWallet,
   closeCooperativeWithWallet,
   buildContentOffer,
 } from '../../frontend/lib/protocol/lifecycle';
@@ -651,7 +652,254 @@ async function runTests() {
     console.log('   ✅ PASS: Zero Anvil keys in Testnet execution paths in frontend.');
   }
 
-  console.log('\n🎉 ALL 9 TESTNET SIGNING SAFETY TESTS PASSED!\n');
+  // Test 10: Injected-wallet account and chain validation individually enforced across all 5 operations
+  console.log('\nTest 10: Verifying account & chain validation individually enforced across all 5 operations...');
+  {
+    const correctAccount = '0x2222222222222222222222222222222222222222' as Address;
+    const wrongAccount = '0x9999999999999999999999999999999999999999' as Address;
+    const mockPublic = {
+      readContract: async () => 1000000000000n,
+      waitForTransactionReceipt: async () => ({ status: 'success' }),
+    };
+
+    // Helper to generate a mock wallet with custom active address and chain
+    function makeWallet(activeAddr: Address, chainId: number) {
+      return {
+        account: { address: activeAddr },
+        getAddresses: async () => [activeAddr],
+        getChainId: async () => chainId,
+        chain: { id: chainId },
+        signTypedData: async () => '0xvalidsig' as Hex,
+        writeContract: async () => '0xmocktx' as Hex,
+      };
+    }
+
+    const offer = buildContentOffer({
+      recipient: correctAccount,
+      token: MOCK_TOKEN,
+      manifestRoot: '0xbbbf56c2d7f84467c6943ebfb4a0df5c504229b730eb7a5bc4607493bca1d6cb' as Hex,
+      unitPrice: 500n,
+    });
+    const ack = {
+      sessionId: ('0x' + '11'.repeat(32)) as Hex,
+      cumulativeUnits: 10n,
+      voucherDigest: ('0x' + '22'.repeat(32)) as Hex,
+    };
+
+    // Operation 1: signContentOfferWithWallet
+    {
+      const wWrongAcc = makeWallet(wrongAccount, TESTNET_CHAIN_ID);
+      await assert.rejects(
+        async () => signContentOfferWithWallet({
+          walletClient: wWrongAcc, settlement: MOCK_SETTLEMENT, chainId: TESTNET_CHAIN_ID, offer, account: correctAccount,
+        }),
+        /Wallet account mismatch/,
+        'signContentOfferWithWallet must reject wrong wallet account'
+      );
+      const wWrongChain = makeWallet(correctAccount, 1);
+      await assert.rejects(
+        async () => signContentOfferWithWallet({
+          walletClient: wWrongChain, settlement: MOCK_SETTLEMENT, chainId: TESTNET_CHAIN_ID, offer, account: correctAccount,
+        }),
+        /Wallet chain ID mismatch/,
+        'signContentOfferWithWallet must reject wrong chain ID'
+      );
+      console.log('   ✅ 10a: signContentOfferWithWallet strictly enforces account & chain.');
+    }
+
+    // Operation 2: openSessionWithWallet
+    {
+      const wWrongAcc = makeWallet(wrongAccount, TESTNET_CHAIN_ID);
+      await assert.rejects(
+        async () => openSessionWithWallet({
+          walletClient: wWrongAcc, publicClient: mockPublic, settlement: MOCK_SETTLEMENT, token: MOCK_TOKEN,
+          payer: correctAccount, recipient: '0x3333333333333333333333333333333333333333' as Address,
+          signerAddress: '0x4444444444444444444444444444444444444444' as Address,
+          manifestRoot: '0xbbbf56c2d7f84467c6943ebfb4a0df5c504229b730eb7a5bc4607493bca1d6cb' as Hex,
+          unitPrice: 500n, maxBillable: 3600n, deposit: 5000000n, validSec: 3600, graceSec: 3600,
+          maxLead: 12n, maxCreditWindow: 10n, maxCreditSegments: 3, maxUnredeemedAmount: 5000n,
+          offerSignature: '0xvalidsig' as Hex, chainId: TESTNET_CHAIN_ID,
+        }),
+        /Wallet account mismatch/,
+        'openSessionWithWallet must reject wrong wallet account'
+      );
+      const wWrongChain = makeWallet(correctAccount, 1);
+      await assert.rejects(
+        async () => openSessionWithWallet({
+          walletClient: wWrongChain, publicClient: mockPublic, settlement: MOCK_SETTLEMENT, token: MOCK_TOKEN,
+          payer: correctAccount, recipient: '0x3333333333333333333333333333333333333333' as Address,
+          signerAddress: '0x4444444444444444444444444444444444444444' as Address,
+          manifestRoot: '0xbbbf56c2d7f84467c6943ebfb4a0df5c504229b730eb7a5bc4607493bca1d6cb' as Hex,
+          unitPrice: 500n, maxBillable: 3600n, deposit: 5000000n, validSec: 3600, graceSec: 3600,
+          maxLead: 12n, maxCreditWindow: 10n, maxCreditSegments: 3, maxUnredeemedAmount: 5000n,
+          offerSignature: '0xvalidsig' as Hex, chainId: TESTNET_CHAIN_ID,
+        }),
+        /Wallet chain ID mismatch/,
+        'openSessionWithWallet must reject wrong chain ID'
+      );
+      console.log('   ✅ 10b: openSessionWithWallet strictly enforces account & chain.');
+    }
+
+    // Operation 3: checkpointWithWallet
+    {
+      const wWrongAcc = makeWallet(wrongAccount, TESTNET_CHAIN_ID);
+      await assert.rejects(
+        async () => checkpointWithWallet({
+          walletClient: wWrongAcc, publicClient: mockPublic, settlement: MOCK_SETTLEMENT,
+          sessionId: ('0x' + '11'.repeat(32)) as Hex, cumulativeUnits: 10n, voucherSig: '0xvsig' as Hex,
+          account: correctAccount, chainId: TESTNET_CHAIN_ID,
+        }),
+        /Wallet account mismatch/,
+        'checkpointWithWallet must reject wrong wallet account'
+      );
+      const wWrongChain = makeWallet(correctAccount, 1);
+      await assert.rejects(
+        async () => checkpointWithWallet({
+          walletClient: wWrongChain, publicClient: mockPublic, settlement: MOCK_SETTLEMENT,
+          sessionId: ('0x' + '11'.repeat(32)) as Hex, cumulativeUnits: 10n, voucherSig: '0xvsig' as Hex,
+          account: correctAccount, chainId: TESTNET_CHAIN_ID,
+        }),
+        /Wallet chain ID mismatch/,
+        'checkpointWithWallet must reject wrong chain ID'
+      );
+      console.log('   ✅ 10c: checkpointWithWallet strictly enforces account & chain.');
+    }
+
+    // Operation 4: signCloseAckWithWallet
+    {
+      const wWrongAcc = makeWallet(wrongAccount, TESTNET_CHAIN_ID);
+      await assert.rejects(
+        async () => signCloseAckWithWallet({
+          walletClient: wWrongAcc, settlement: MOCK_SETTLEMENT, chainId: TESTNET_CHAIN_ID, ack, account: correctAccount,
+        }),
+        /Wallet account mismatch/,
+        'signCloseAckWithWallet must reject wrong wallet account'
+      );
+      const wWrongChain = makeWallet(correctAccount, 1);
+      await assert.rejects(
+        async () => signCloseAckWithWallet({
+          walletClient: wWrongChain, settlement: MOCK_SETTLEMENT, chainId: TESTNET_CHAIN_ID, ack, account: correctAccount,
+        }),
+        /Wallet chain ID mismatch/,
+        'signCloseAckWithWallet must reject wrong chain ID'
+      );
+      console.log('   ✅ 10d: signCloseAckWithWallet strictly enforces account & chain.');
+    }
+
+    // Operation 5: closeCooperativeWithWallet
+    {
+      const wWrongAcc = makeWallet(wrongAccount, TESTNET_CHAIN_ID);
+      await assert.rejects(
+        async () => closeCooperativeWithWallet({
+          walletClient: wWrongAcc, publicClient: mockPublic, settlement: MOCK_SETTLEMENT,
+          sessionId: ('0x' + '11'.repeat(32)) as Hex, cumulativeUnits: 10n, voucherSig: '0xvsig' as Hex,
+          ackSig: '0xacksig' as Hex, chainId: TESTNET_CHAIN_ID, account: correctAccount,
+        }),
+        /Wallet account mismatch/,
+        'closeCooperativeWithWallet must reject wrong wallet account'
+      );
+      const wWrongChain = makeWallet(correctAccount, 1);
+      await assert.rejects(
+        async () => closeCooperativeWithWallet({
+          walletClient: wWrongChain, publicClient: mockPublic, settlement: MOCK_SETTLEMENT,
+          sessionId: ('0x' + '11'.repeat(32)) as Hex, cumulativeUnits: 10n, voucherSig: '0xvsig' as Hex,
+          ackSig: '0xacksig' as Hex, chainId: TESTNET_CHAIN_ID, account: correctAccount,
+        }),
+        /Wallet chain ID mismatch/,
+        'closeCooperativeWithWallet must reject wrong chain ID'
+      );
+      console.log('   ✅ 10e: closeCooperativeWithWallet strictly enforces account & chain.');
+    }
+  }
+
+  // Test 11: Negative EIP-712 security checks: domain separation & replay prevention across playback advancement
+  console.log('\nTest 11: Negative EIP-712 security checks: domain separation & CloseAck non-reusability...');
+  {
+    const creatorAccount = privateKeyToAccount(generatePrivateKey());
+    const validDomain = {
+      name: 'StreamPaySettlement',
+      version: '2.5',
+      chainId: BigInt(TESTNET_CHAIN_ID),
+      verifyingContract: MOCK_SETTLEMENT,
+    };
+
+    const offer = buildContentOffer({
+      recipient: creatorAccount.address,
+      token: MOCK_TOKEN,
+      manifestRoot: '0xbbbf56c2d7f84467c6943ebfb4a0df5c504229b730eb7a5bc4607493bca1d6cb' as Hex,
+      unitPrice: 500n,
+    });
+
+    const offerSig = await creatorAccount.signTypedData({
+      domain: validDomain,
+      types: contentOfferTypes,
+      primaryType: 'ContentOffer',
+      message: offer,
+    });
+
+    // 11a. Negative check: Wrong chain ID in domain produces unrecoverable signer
+    const recoveredOnWrongChain = await recoverTypedDataAddress({
+      domain: { ...validDomain, chainId: 1n }, // Ethereum Mainnet instead of Monad Testnet
+      types: contentOfferTypes,
+      primaryType: 'ContentOffer',
+      message: offer,
+      signature: offerSig,
+    });
+    assert.notStrictEqual(
+      recoveredOnWrongChain.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      'Signature signed for chain 10143 must not recover creator on chain 1'
+    );
+    console.log('   ✅ 11a: Domain separation by chain ID verified (wrong chainId cannot verify signature).');
+
+    // 11b. Negative check: Wrong verifyingContract in domain produces unrecoverable signer
+    const recoveredOnWrongContract = await recoverTypedDataAddress({
+      domain: { ...validDomain, verifyingContract: '0x9999999999999999999999999999999999999999' as Address },
+      types: contentOfferTypes,
+      primaryType: 'ContentOffer',
+      message: offer,
+      signature: offerSig,
+    });
+    assert.notStrictEqual(
+      recoveredOnWrongContract.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      'Signature signed for contract A must not recover creator on contract B'
+    );
+    console.log('   ✅ 11b: Domain separation by verifyingContract verified.');
+
+    // 11c. CloseAck non-reusability across playback advancement:
+    // When playback advances from cumulativeUnits 10 to 14, an old ack signature for 10
+    // CANNOT be reused for cumulativeUnits 14.
+    const ack10 = {
+      sessionId: ('0x' + '11'.repeat(32)) as Hex,
+      cumulativeUnits: 10n,
+      voucherDigest: ('0x' + '22'.repeat(32)) as Hex,
+    };
+    const ack10Sig = await creatorAccount.signTypedData({
+      domain: validDomain,
+      types: closeAckTypes,
+      primaryType: 'CloseAck',
+      message: ack10,
+    });
+
+    // Attempting to present ack10Sig for cumulativeUnits 14n fails recovery
+    const ack14 = { ...ack10, cumulativeUnits: 14n };
+    const recoveredForAdvancedUnits = await recoverTypedDataAddress({
+      domain: validDomain,
+      types: closeAckTypes,
+      primaryType: 'CloseAck',
+      message: ack14,
+      signature: ack10Sig,
+    });
+    assert.notStrictEqual(
+      recoveredForAdvancedUnits.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      'CloseAck signature for units 10 must NOT recover creator when units advance to 14'
+    );
+    console.log('   ✅ 11c: CloseAck non-reusability proven: signed ack cannot be reused after playback advances.');
+  }
+
+  console.log('\n🎉 ALL 11 TESTNET SIGNING SAFETY & EIP-712 TESTS PASSED!\n');
 }
 
 runTests().catch((err) => {
