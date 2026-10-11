@@ -9,6 +9,10 @@ name: streampay-indexer
 description: StreamPay v2.5 Envio HyperIndex event indexer for local Anvil network
 networks:
   - id: 31337
+    # Anvil is not a HyperSync-supported network; use its JSON-RPC endpoint
+    # explicitly for historical sync and local development.
+    rpc_config:
+      url: http://127.0.0.1:8545
     start_block: 0
     contracts:
       - name: StreamPaySettlement
