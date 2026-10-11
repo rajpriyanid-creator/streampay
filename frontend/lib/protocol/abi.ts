@@ -174,6 +174,39 @@ export const STREAMPAY_SETTLEMENT_ABI = [
     stateMutability: 'view',
   },
   {
+    type: 'function',
+    name: 'hashVoucher',
+    inputs: [
+      {
+        name: 'voucher',
+        type: 'tuple',
+        components: [
+          { name: 'sessionId', type: 'bytes32' },
+          { name: 'cumulativeUnits', type: 'uint64' },
+        ],
+      },
+    ],
+    outputs: [{ name: '', type: 'bytes32' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'hashCloseAck',
+    inputs: [
+      {
+        name: 'ack',
+        type: 'tuple',
+        components: [
+          { name: 'sessionId', type: 'bytes32' },
+          { name: 'cumulativeUnits', type: 'uint64' },
+          { name: 'voucherDigest', type: 'bytes32' },
+        ],
+      },
+    ],
+    outputs: [{ name: '', type: 'bytes32' }],
+    stateMutability: 'view',
+  },
+  {
     type: 'event',
     name: 'StreamOpened',
     inputs: [

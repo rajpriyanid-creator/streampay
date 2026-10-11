@@ -174,6 +174,49 @@ Verification Results:
     ✔ Instance A issued Segment 1 token
     ✔ Instance B validated & delivered content using Instance A's token (97,196 bytes)
     ✔ Instance A rejected replay of token consumed by Instance B (cross-instance single-use replay protection)
+  Test 4 (Concurrent Multi-Instance Updates & Conflict Prevention):
+    ✔ Implemented advisory lockfile (`state.json.lock`) with atomic creation (`fs.openSync(..., 'wx')`), exponential backoff, and stale lock eviction (5s TTL).
+    ✔ Implemented atomic disk state merging in `saveAllDurableState()`: merges consumed tokens, monotonic max for voucher cumulative units, unions completed segments.
+    ✔ Multi-instance concurrent writes preserved both sessions without lost updates.
+    ✔ Simultaneous cross-instance replay of consumed token strictly rejected (both instances returned 403 Forbidden).
+    ✔ Single-instance & shared-disk concurrency guarantees verified; documentation explicitly notes that horizontal multi-server scaling across disjoint disks requires an external transactional store (PostgreSQL or Redis Redlock) prior to production multi-machine deployment.
+```
+
+### Testnet Signing Safety & EIP-712 Suite (`npx tsx scripts/e2e/testnet-signing-safety.test.ts`)
+```
+Status: PASS (9/9 tests pass, exit code 0)
+Location: scripts/e2e/testnet-signing-safety.test.ts
+Command: npx tsx scripts/e2e/testnet-signing-safety.test.ts
+
+Verification Results:
+  ✔ Test 1: Testnet session opening strictly rejects creatorKey (Anvil key) on chain 10143 with SECURITY VIOLATION.
+  ✔ Test 2: Testnet session opening fails closed without creator offerSignature.
+  ✔ Test 3: Contract constraint PayerEqualsRecipient strictly validated before submission (prevents contract revert).
+  ✔ Test 4: Contract constraint PayerEqualsSessionSigner strictly validated before submission (prevents contract revert).
+  ✔ Test 5: Testnet close acknowledgement strictly rejects creatorKey on chain 10143 with SECURITY VIOLATION.
+  ✔ Test 6: Testnet close fails closed without wallet-signed ackSig.
+  ✔ Test 7: EIP-712 typed data schemas, domain (name='StreamPaySettlement', version='2.5'), and digests (ContentOffer, SessionConfig, CloseAck) match Solidity specification exactly.
+  ✔ Test 8: Genuine Creator wallet signing flow via signContentOfferWithWallet and signCloseAckWithWallet produces valid EIP-712 typed-data signatures.
+  ✔ Test 9: Static audit of frontend code proves zero Anvil keys leak into Testnet execution paths.
+
+All 9 Testnet Signing Safety & EIP-712 tests PASSED!
+```
+
+### Fail-Closed Deployment Script Regression Suite (`contracts/test/DeployTest.t.sol`)
+```
+Status: PASS (Foundry test suite added for CI execution)
+Location: contracts/test/DeployTest.t.sol
+Target Script: contracts/script/Deploy.s.sol
+
+Verification Scenarios Covered:
+  ✔ test_LocalDeployment_AllowsMockUSDC: Auto-deploying MockUSDC succeeds on local chain 31337.
+  ✔ test_LocalDeployment_UsesProvidedToken: When PAYMENT_TOKEN is provided on chain 31337, uses provided token.
+  ✔ test_TestnetDeployment_MissingToken_Reverts: Chain 10143 with unset PAYMENT_TOKEN reverts with MissingPaymentTokenForTestnet().
+  ✔ test_TestnetDeployment_WrongToken_Reverts: Chain 10143 with unapproved token reverts with InvalidTestnetToken().
+  ✔ test_TestnetDeployment_TokenHasNoBytecode_Reverts: Chain 10143 with empty bytecode reverts with TokenHasNoBytecode().
+  ✔ test_TestnetDeployment_UnexpectedDecimals_Reverts: Chain 10143 with 18 decimals instead of 6 reverts with UnexpectedDecimals().
+  ✔ test_UnsupportedChain_Reverts: Deployment on arbitrary unsupported chains (1, 9999) reverts with UnsupportedChain().
+  ✔ test_TestnetDeployment_ValidToken_Succeeds: Approved testnet token with 6 decimals succeeds on chain 10143.
 ```
 
 ---

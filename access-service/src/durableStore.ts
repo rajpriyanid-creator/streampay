@@ -170,14 +170,57 @@ export function readDurableState(): FullDurableState | null {
   }
 }
 
+function getLockFilePath(): string {
+  return path.join(config.DATA_STORE_DIR, 'state.json.lock');
+}
+
+function acquireLock(timeoutMs = 3000): number {
+  const lockPath = getLockFilePath();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      return fd;
+    } catch (err: any) {
+      if (err.code === 'EEXIST') {
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > 5000) {
+            fs.unlinkSync(lockPath);
+            continue;
+          }
+        } catch {}
+        const end = Date.now() + 5;
+        while (Date.now() < end) {}
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error(`Timeout acquiring durable state lockfile: ${lockPath}`);
+}
+
+function releaseLock(fd: number): void {
+  const lockPath = getLockFilePath();
+  try {
+    fs.closeSync(fd);
+  } catch {}
+  try {
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath);
+    }
+  } catch {}
+}
+
 /**
  * Atomically writes full state to disk using a unique temporary file then rename.
+ * Throws on failure to ensure persistence errors are never silently masked.
  */
 export function writeDurableState(state: FullDurableState): void {
   if (!isPersistenceEnabled()) return;
+  const targetPath = getStateFilePath();
   try {
     fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
-    const targetPath = getStateFilePath();
     const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
     fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), { encoding: 'utf8' });
     fs.renameSync(tmpPath, targetPath);
@@ -185,7 +228,8 @@ export function writeDurableState(state: FullDurableState): void {
       lastLoadedMtimeMs = fs.statSync(targetPath).mtimeMs;
     } catch {}
   } catch (err: any) {
-    console.warn(`Failed to write durable state: ${err.message}`);
+    console.error(`CRITICAL: Failed to write durable state to ${targetPath}: ${err.message}`);
+    throw new Error(`Durable persistence write failure: ${err.message}`);
   }
 }
 
@@ -302,108 +346,167 @@ export function restoreDurableState(): boolean {
 
 /**
  * Saves current active in-memory stores to disk.
+ * Uses lockfile coordination and merges with existing disk state to prevent
+ * lost updates under concurrent multi-process writes.
  */
 export function saveAllDurableState(): void {
   if (!isPersistenceEnabled()) return;
 
-  const nowS = Math.floor(Date.now() / 1000);
-  const nowMs = Date.now();
+  fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
+  const lockFd = acquireLock();
+  try {
+    const nowS = Math.floor(Date.now() / 1000);
+    const nowMs = Date.now();
 
-  // 1. Serialize consumed tokens (prune expired)
-  const consumedTokens: Record<string, number> = {};
-  if (activeConsumedMap) {
-    for (const [sig, exp] of activeConsumedMap.entries()) {
-      if (exp >= nowS) {
-        consumedTokens[sig] = exp;
-      }
-    }
-  }
-
-  // 2. Serialize vouchers
-  const vouchers: Record<string, PersistedStoredVoucher> = {};
-  if (activeVouchersMap) {
-    for (const [key, v] of activeVouchersMap.entries()) {
-      vouchers[key] = {
-        sessionId: v.sessionId,
-        sessionSigner: v.sessionSigner,
-        recipient: v.recipient,
-        contractAddress: v.contractAddress,
-        chainId: v.chainId,
-        highestCumulativeUnits: v.highestCumulativeUnits.toString(),
-        deliveredCumulativeUnits: v.deliveredCumulativeUnits.toString(),
-        lastVoucher: {
-          sessionId: v.lastVoucher.sessionId,
-          cumulativeUnits: v.lastVoucher.cumulativeUnits.toString(),
-          signature: v.lastVoucher.signature,
-        },
-        lastDeliveredVoucher: v.lastDeliveredVoucher
-          ? {
-              sessionId: v.lastDeliveredVoucher.sessionId,
-              cumulativeUnits: v.lastDeliveredVoucher.cumulativeUnits.toString(),
-              signature: v.lastDeliveredVoucher.signature,
-            }
-          : undefined,
-        lastUpdated: v.lastUpdated,
-        totalServedSegments: v.totalServedSegments,
-      };
-    }
-  }
-
-  // 3. Serialize sessions
-  const sessions: Record<string, PersistedSessionState> = {};
-  if (activeSessionsMap) {
-    for (const [key, s] of activeSessionsMap.entries()) {
-      const reservations: Record<string, PersistedReservationEntry> = {};
-      const segToSig: Record<string, string> = {};
-
-      for (const [sig, r] of s.reservations.entries()) {
-        if (!r.delivered) {
-          reservations[sig] = {
-            token: r.token,
-            tokenSig: r.tokenSig,
-            segmentIndex: r.segmentIndex,
-            cumulativeUnits: r.cumulativeUnits.toString(),
-            expiresAtMs: r.expiresAtMs,
-            consumed: r.consumed,
-            delivered: r.delivered,
-          };
-          segToSig[String(r.segmentIndex)] = sig;
+    // 1. Serialize consumed tokens (prune expired)
+    const consumedTokens: Record<string, number> = {};
+    if (activeConsumedMap) {
+      for (const [sig, exp] of activeConsumedMap.entries()) {
+        if (exp >= nowS) {
+          consumedTokens[sig] = exp;
         }
       }
-
-      const deliveredTokens: Record<string, number> = {};
-      for (const [sig, ts] of s.deliveredTokens.entries()) {
-        deliveredTokens[sig] = ts;
-      }
-
-      sessions[key] = {
-        sessionId: s.sessionId,
-        lastCheckpointUnits: s.lastCheckpointUnits.toString(),
-        limits: {
-          maxCreditSegments: s.limits.maxCreditSegments,
-          maxCreditWindowUnits: s.limits.maxCreditWindowUnits.toString(),
-          maxUnredeemedAmount: s.limits.maxUnredeemedAmount.toString(),
-          unitPrice: s.limits.unitPrice.toString(),
-          maxBillableUnits: s.limits.maxBillableUnits.toString(),
-          deposit: s.limits.deposit.toString(),
-        },
-        reservations,
-        segmentToTokenSig: segToSig,
-        completedSegments: Array.from(s.completedSegments),
-        deliveredTokens,
-      };
     }
+
+    // 2. Serialize vouchers
+    const vouchers: Record<string, PersistedStoredVoucher> = {};
+    if (activeVouchersMap) {
+      for (const [key, v] of activeVouchersMap.entries()) {
+        vouchers[key] = {
+          sessionId: v.sessionId,
+          sessionSigner: v.sessionSigner,
+          recipient: v.recipient,
+          contractAddress: v.contractAddress,
+          chainId: v.chainId,
+          highestCumulativeUnits: v.highestCumulativeUnits.toString(),
+          deliveredCumulativeUnits: v.deliveredCumulativeUnits.toString(),
+          lastVoucher: {
+            sessionId: v.lastVoucher.sessionId,
+            cumulativeUnits: v.lastVoucher.cumulativeUnits.toString(),
+            signature: v.lastVoucher.signature,
+          },
+          lastDeliveredVoucher: v.lastDeliveredVoucher
+            ? {
+                sessionId: v.lastDeliveredVoucher.sessionId,
+                cumulativeUnits: v.lastDeliveredVoucher.cumulativeUnits.toString(),
+                signature: v.lastDeliveredVoucher.signature,
+              }
+            : undefined,
+          lastUpdated: v.lastUpdated,
+          totalServedSegments: v.totalServedSegments,
+        };
+      }
+    }
+
+    // 3. Serialize sessions
+    const sessions: Record<string, PersistedSessionState> = {};
+    if (activeSessionsMap) {
+      for (const [key, s] of activeSessionsMap.entries()) {
+        const reservations: Record<string, PersistedReservationEntry> = {};
+        const segToSig: Record<string, string> = {};
+
+        for (const [sig, r] of s.reservations.entries()) {
+          if (!r.delivered) {
+            reservations[sig] = {
+              token: r.token,
+              tokenSig: r.tokenSig,
+              segmentIndex: r.segmentIndex,
+              cumulativeUnits: r.cumulativeUnits.toString(),
+              expiresAtMs: r.expiresAtMs,
+              consumed: r.consumed,
+              delivered: r.delivered,
+            };
+            segToSig[String(r.segmentIndex)] = sig;
+          }
+        }
+
+        const deliveredTokens: Record<string, number> = {};
+        for (const [sig, ts] of s.deliveredTokens.entries()) {
+          deliveredTokens[sig] = ts;
+        }
+
+        sessions[key] = {
+          sessionId: s.sessionId,
+          lastCheckpointUnits: s.lastCheckpointUnits.toString(),
+          limits: {
+            maxCreditSegments: s.limits.maxCreditSegments,
+            maxCreditWindowUnits: s.limits.maxCreditWindowUnits.toString(),
+            maxUnredeemedAmount: s.limits.maxUnredeemedAmount.toString(),
+            unitPrice: s.limits.unitPrice.toString(),
+            maxBillableUnits: s.limits.maxBillableUnits.toString(),
+            deposit: s.limits.deposit.toString(),
+          },
+          reservations,
+          segmentToTokenSig: segToSig,
+          completedSegments: Array.from(s.completedSegments),
+          deliveredTokens,
+        };
+      }
+    }
+
+    // 4. Merge disk state to prevent lost updates from concurrent writers
+    const diskState = readDurableState();
+    if (diskState) {
+      if (diskState.consumedTokens) {
+        for (const [sig, exp] of Object.entries(diskState.consumedTokens)) {
+          if (exp >= nowS && !consumedTokens[sig]) {
+            consumedTokens[sig] = exp;
+            if (activeConsumedMap) activeConsumedMap.set(sig, exp);
+          }
+        }
+      }
+      if (diskState.vouchers) {
+        for (const [key, dv] of Object.entries(diskState.vouchers)) {
+          const mv = vouchers[key];
+          if (!mv) {
+            vouchers[key] = dv;
+          } else if (BigInt(dv.highestCumulativeUnits) > BigInt(mv.highestCumulativeUnits)) {
+            vouchers[key] = dv;
+          }
+        }
+      }
+      if (diskState.sessions) {
+        for (const [key, ds] of Object.entries(diskState.sessions)) {
+          const ms = sessions[key];
+          if (!ms) {
+            sessions[key] = ds;
+          } else {
+            const merged = new Set([...ms.completedSegments, ...(ds.completedSegments || [])]);
+            ms.completedSegments = Array.from(merged);
+            if (ds.deliveredTokens) {
+              for (const [sig, ts] of Object.entries(ds.deliveredTokens)) {
+                if (!ms.deliveredTokens[sig]) ms.deliveredTokens[sig] = ts;
+              }
+            }
+            if (ds.reservations) {
+              for (const [sig, r] of Object.entries(ds.reservations)) {
+                if (!ms.reservations[sig]) {
+                  ms.reservations[sig] = r;
+                } else if (r.delivered && !ms.reservations[sig].delivered) {
+                  ms.reservations[sig] = r;
+                }
+              }
+            }
+            if (BigInt(ds.lastCheckpointUnits) > BigInt(ms.lastCheckpointUnits)) {
+              ms.lastCheckpointUnits = ds.lastCheckpointUnits;
+            }
+          }
+        }
+      }
+    }
+
+    const payload: FullDurableState = {
+      version: '2.5',
+      savedAt: nowMs,
+      consumedTokens,
+      vouchers,
+      sessions,
+    };
+
+    writeDurableState(payload);
+  } finally {
+    releaseLock(lockFd);
   }
-
-  const payload: FullDurableState = {
-    version: '2.5',
-    savedAt: nowMs,
-    consumedTokens,
-    vouchers,
-    sessions,
-  };
-
-  writeDurableState(payload);
 }
 
 /**
@@ -423,6 +526,10 @@ export function clearDurableState(): void {
     const targetPath = getStateFilePath();
     if (fs.existsSync(targetPath)) {
       fs.unlinkSync(targetPath);
+    }
+    const lockPath = getLockFilePath();
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath);
     }
   } catch (err: any) {
     console.warn(`Failed to clear durable state: ${err.message}`);

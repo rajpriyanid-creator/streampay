@@ -42,7 +42,7 @@ async function waitForServer(url: string, timeoutMs = 8000): Promise<boolean> {
 }
 
 function spawnInstance(port: number, envOverrides: Record<string, string> = {}): ChildProcess {
-  return spawn(
+  const p = spawn(
     'node',
     [path.join(__dirname, '../../access-service/dist/server.js')],
     {
@@ -59,6 +59,8 @@ function spawnInstance(port: number, envOverrides: Record<string, string> = {}):
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );
+  p.stderr?.on('data', (d) => console.error(`[err:${port}]`, d.toString().trim()));
+  return p;
 }
 
 async function signVoucher(sessionId: Hex, cumulativeUnits: bigint) {
@@ -271,6 +273,79 @@ async function runTests() {
       throw new Error(`Expected Instance A to reject token consumed by Instance B, got ${replayResA.status}`);
     }
     console.log('  ✅ Instance A rejected replay of token consumed by Instance B (cross-instance single-use)');
+
+    // ────────────────────────────────────────────────────────────────
+    // TEST 4: Concurrent Cross-Instance Updates & Conflict Prevention
+    // ────────────────────────────────────────────────────────────────
+    console.log('\nTest 4: Verifying concurrent updates & conflict resolution across instances...');
+
+    // Instance A issues and delivers Segment 2 for Session 1
+    const sig2 = await signVoucher(sessionId, 6n);
+    const gateResA2 = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 2,
+        voucher: { sessionId, cumulativeUnits: '6', signature: sig2 },
+      }),
+    });
+    const gateDataA2: any = await gateResA2.json();
+    if (!gateResA2.ok || !gateDataA2.success) throw new Error('Failed to gate segment 2 on Instance A');
+
+    // Deliver segment 2 on Instance A
+    const delResA2 = await fetch(`${ACCESS_URL_A}${gateDataA2.contentUrl}`);
+    if (!delResA2.ok) throw new Error('Failed to deliver segment 2 on Instance A');
+
+    // Meanwhile, Session 2 is processed on Instance B concurrently
+    const session2Id: Hex = '0x2222222222222222222222222222222222222222222222222222222222222222';
+    const sigSession2 = await signVoucher(session2Id, 2n);
+    const gateResB2 = await fetch(`${ACCESS_URL_B}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: session2Id,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 0,
+        voucher: { sessionId: session2Id, cumulativeUnits: '2', signature: sigSession2 },
+      }),
+    });
+    const gateDataB2: any = await gateResB2.json();
+    if (!gateResB2.ok || !gateDataB2.success) throw new Error('Failed to gate session 2 on Instance B');
+
+    // Deliver on Instance B
+    const delResB2 = await fetch(`${ACCESS_URL_B}${gateDataB2.contentUrl}`);
+    if (!delResB2.ok) throw new Error('Failed to deliver session 2 on Instance B');
+
+    // Verify state.json contains updates from BOTH Instance A and Instance B (no lost updates!)
+    const stateFile = path.join(TEST_DIR, 'state.json');
+    const persistedState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    if (!persistedState.sessions[sessionId.toLowerCase()]) {
+      throw new Error('Session 1 missing from persisted state');
+    }
+    if (!persistedState.sessions[session2Id.toLowerCase()]) {
+      throw new Error('Session 2 lost from persisted state due to concurrent overwrite');
+    }
+    console.log('  ✅ Concurrent writes preserved both sessions in state.json without lost updates');
+
+    // Verify concurrent simultaneous replay attempt across both instances
+    const [replay1, replay2] = await Promise.all([
+      fetch(`${ACCESS_URL_A}${gateDataA2.contentUrl}`),
+      fetch(`${ACCESS_URL_B}${gateDataA2.contentUrl}`),
+    ]);
+    if (replay1.status !== 403 || replay2.status !== 403) {
+      throw new Error(`Expected both concurrent replays to be rejected (403), got ${replay1.status} and ${replay2.status}`);
+    }
+    console.log('  ✅ Simultaneous cross-instance replay of consumed token strictly rejected (both returned 403)');
   } finally {
     procA.kill('SIGKILL');
     procB.kill('SIGKILL');

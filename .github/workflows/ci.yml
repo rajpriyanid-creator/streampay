@@ -163,6 +163,9 @@ jobs:
           echo "Running Durable Persistence, Restart Recovery & Dual-Instance Suite..."
           npx tsx scripts/e2e/durable-persistence.test.ts
 
+          echo "Running Testnet Signing Safety & EIP-712 Verification Suite..."
+          npx tsx scripts/e2e/testnet-signing-safety.test.ts
+
       # Upload test artifacts
       - name: Upload Test Results
         if: always()
