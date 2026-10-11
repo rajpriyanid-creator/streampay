@@ -629,7 +629,7 @@ app.post('/api/session/checkpoint-sync', async (req: Request, res: Response) => 
   }
   try {
     if (config.SETTLEMENT_ADDRESS) {
-      const s = await readSession(sessionId as Hex);
+      const s = await readSession(sessionId as Hex, { fresh: true });
       if (s) {
         await reservationLedger.onCheckpoint(sessionId, s.settledUnits);
         res.json({ success: true, settledUnits: s.settledUnits.toString() });

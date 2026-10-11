@@ -70,6 +70,12 @@ async function main() {
   });
   console.log(`   ✅ Signed voucher for 14 units: ${voucher14Sig.slice(0, 14)}... (Continued playback verified!)`);
 
+  // Make elapsed-time dependent voucher bounds deterministic on Anvil. The
+  // contract enforces cumulativeUnits <= elapsed + maxLeadUnits.
+  const rpcClient = createPublicClient({ transport: http(RPC) });
+  await rpcClient.request({ method: 'evm_increaseTime' as any, params: [30] as any });
+  await rpcClient.request({ method: 'evm_mine' as any, params: [] as any });
+
   // Step 5: Cooperative close and refund
   console.log('\n5. Cooperative Close: finalizing session at 14 cumulative units & refunding excess deposit...');
   const closeTx = await closeCooperative({
