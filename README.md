@@ -2,6 +2,8 @@
 
 StreamPay is a high-throughput micro-payment streaming platform engineered specifically for **Monad Testnet (Chain ID 10143)**. It enables sub-cent, pay-per-second media streaming using bounded escrows and off-chain EIP-712 signed cumulative vouchers.
 
+Demo Video: <link>
+
 ---
 
 ## 🌟 Key Architecture & Protocol Highlights (v2.5)
@@ -141,6 +143,16 @@ npm ci --prefix access-service
 npm ci --prefix frontend
 npm run build
 ```
+
+## How to deploy to Monad Testnet
+
+Deployment is intentionally not performed by CI or this repository workflow. After independently verifying the contract, export `DEPLOYER_PRIVATE_KEY` in the shell without printing it, then run:
+
+```bash
+bash scripts/deploy-testnet.sh
+```
+
+The helper uses `https://testnet-rpc.monad.xyz`, requires the approved testnet USDC address, verifies `paymentToken()`, and updates `manifests/testnet.json` only after the broadcast artifact contains real deployment values.
 
 ## AI Tools Disclosure
 

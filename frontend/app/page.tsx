@@ -365,6 +365,31 @@ export default function StreamPayDashboard() {
     }
   }, [networkMode]);
 
+  // Keep the UI fail-closed when the injected wallet changes account or chain.
+  useEffect(() => {
+    if (networkMode !== 'TESTNET' || typeof window === 'undefined' || !(window as any).ethereum) return;
+    const provider = (window as any).ethereum;
+    const onAccountsChanged = (accounts: string[]) => {
+      setPayerAddress((accounts?.[0] as Hex) || null);
+      setIsWalletConnected(Boolean(accounts?.[0]));
+      setCreatorOffer(null);
+      setCreatorCloseAck(null);
+    };
+    const onChainChanged = (chainId: string) => {
+      const numericChainId = parseInt(chainId, 16);
+      if (numericChainId !== 10143) {
+        setIsWalletConnected(false);
+        setStatusMsg({ text: `Wrong chain: connected to ${numericChainId}, need Monad Testnet (10143).`, type: 'error' });
+      }
+    };
+    provider.on?.('accountsChanged', onAccountsChanged);
+    provider.on?.('chainChanged', onChainChanged);
+    return () => {
+      provider.removeListener?.('accountsChanged', onAccountsChanged);
+      provider.removeListener?.('chainChanged', onChainChanged);
+    };
+  }, [networkMode]);
+
   // Verify Bytecode Deployment on mount or network change
   useEffect(() => {
     checkDeployment();
@@ -766,7 +791,7 @@ export default function StreamPayDashboard() {
           return;
         }
         if (!isDeployed) {
-          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          setStatusMsg({ text: 'Testnet contract not deployed yet', type: 'warn' });
           return;
         }
         await assertInjectedWalletState(payerAddress, activeManifest.chainId);
@@ -877,7 +902,7 @@ export default function StreamPayDashboard() {
           return;
         }
         if (!isDeployed) {
-          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          setStatusMsg({ text: 'Testnet contract not deployed yet', type: 'warn' });
           return;
         }
         if (!creatorCloseAck || creatorCloseAck.cumulativeUnits !== cumulativeUnits) {
@@ -1048,6 +1073,12 @@ export default function StreamPayDashboard() {
         </div>
       )}
 
+      {networkMode === 'TESTNET' && !activeManifest.settlementContract && (
+        <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', background: '#78350f', border: '1px solid #b45309', color: '#fef3c7', fontWeight: 'bold' }}>
+          Testnet contract not deployed yet. Open, checkpoint, and close are disabled until `manifests/testnet.json` contains a verified settlement contract.
+        </div>
+      )}
+
       {statusMsg && (
         <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '24px', background: statusMsg.type === 'error' ? '#7f1d1d' : statusMsg.type === 'success' ? '#065f46' : statusMsg.type === 'warn' ? '#78350f' : '#1e3a8a' }}>
           {statusMsg.text}
@@ -1200,14 +1231,14 @@ export default function StreamPayDashboard() {
           <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
             <button
               onClick={handleCheckpointOnChain}
-              disabled={!session || session.status !== 'OPEN'}
+              disabled={!session || session.status !== 'OPEN' || (networkMode === 'TESTNET' && !isDeployed)}
               style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
               {isDeployed ? 'Checkpoint On-Chain' : 'Simulate Checkpoint'}
             </button>
             <button
               onClick={handleCloseSession}
-              disabled={!session || session.status === 'CLOSED'}
+              disabled={!session || session.status === 'CLOSED' || (networkMode === 'TESTNET' && !isDeployed)}
               style={{ flex: 1, background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
               {isDeployed ? 'Close & Refund On-Chain' : 'Simulate Close & Refund'}

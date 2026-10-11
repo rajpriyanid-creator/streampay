@@ -41,6 +41,7 @@ import {
   closeCooperativeWithWallet,
   buildContentOffer,
 } from '../../frontend/lib/protocol/lifecycle';
+import { verifySettlementContract } from '../../frontend/lib/protocol/contractClient';
 import { CANONICAL_PRICING_POLICY_HASH } from '../../frontend/lib/protocol/typedData';
 
 const TESTNET_CHAIN_ID = 10143;
@@ -653,7 +654,34 @@ async function runTests() {
   }
 
   // Test 10: Injected-wallet account and chain validation individually enforced across all 5 operations
-  console.log('\nTest 10: Verifying account & chain validation individually enforced across all 5 operations...');
+  console.log('\nTest 10: Verifying deployment rejects wrong token and wrong chain...');
+  {
+    const wrongToken = '0x9999999999999999999999999999999999999999' as Address;
+    const mockDeploymentClient = {
+      getChainId: async () => TESTNET_CHAIN_ID,
+      getBytecode: async () => '0x6000',
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'paymentToken') return wrongToken;
+        if (functionName === 'decimals') return 6;
+        if (functionName === 'CHALLENGE_SECONDS') return 900n;
+        return '0x';
+      },
+    };
+    const wrongTokenResult = await verifySettlementContract(
+      'http://unused', MOCK_SETTLEMENT, TESTNET_CHAIN_ID, MOCK_TOKEN, mockDeploymentClient
+    );
+    assert(!wrongTokenResult.valid && /Payment token mismatch/.test(wrongTokenResult.error || ''), 'wrong token must be rejected');
+
+    const wrongChainResult = await verifySettlementContract(
+      'http://unused', MOCK_SETTLEMENT, TESTNET_CHAIN_ID, MOCK_TOKEN,
+      { ...mockDeploymentClient, getChainId: async () => LOCAL_CHAIN_ID }
+    );
+    assert(!wrongChainResult.valid && /Chain ID mismatch/.test(wrongChainResult.error || ''), 'wrong chain must be rejected');
+    console.log('   ✅ Deployment verification rejects wrong payment token and wrong chain.');
+  }
+
+  // Test 11: Injected-wallet account and chain validation individually enforced across all 5 operations
+  console.log('\nTest 11: Verifying account & chain validation individually enforced across all 5 operations...');
   {
     const correctAccount = '0x2222222222222222222222222222222222222222' as Address;
     const wrongAccount = '0x9999999999999999999999999999999999999999' as Address;
@@ -812,8 +840,8 @@ async function runTests() {
     }
   }
 
-  // Test 11: Negative EIP-712 security checks: domain separation & replay prevention across playback advancement
-  console.log('\nTest 11: Negative EIP-712 security checks: domain separation & CloseAck non-reusability...');
+  // Test 12: Negative EIP-712 security checks: domain separation & replay prevention across playback advancement
+  console.log('\nTest 12: Negative EIP-712 security checks: domain separation & CloseAck non-reusability...');
   {
     const creatorAccount = privateKeyToAccount(generatePrivateKey());
     const validDomain = {
