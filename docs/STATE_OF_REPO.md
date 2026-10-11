@@ -2,7 +2,7 @@
 
 **Timestamp:** 2026-10-10  
 **Repository Branch:** `fix/testnet-signing-deployment-safety`
-**Latest HEAD Commit:** `c57b12e`
+**Latest HEAD Commit:** `9f79357`
 **Commit Message:** `feat(ui): fail closed before testnet deployment`
 
 ---

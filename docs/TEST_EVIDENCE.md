@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-10  
 **Branch:** `fix/testnet-signing-deployment-safety`
-**Commit:** `c57b12e`
+**Commit:** `9f79357`
 **GitHub Actions Runs:** [Run #38076882199](https://github.com/rajpriyanid-creator/streampay/actions/runs/38076882199) (Latest: **SUCCESS**), [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (**SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
