@@ -7,6 +7,13 @@
 
 ---
 
+## Current security-remediation branch
+
+The active branch is `fix/testnet-signing-deployment-safety`, currently at
+commit `58eb0a5`. It contains the security remediation work and the CI/test
+documentation updates made after the historical baseline above. The testnet
+manifest remains intentionally undeployed.
+
 ## 1. Initial Findings & Code Search Inventory
 
 1. **Fake Transaction Hashes Found in Frontend (`frontend/app/page.tsx`)**:

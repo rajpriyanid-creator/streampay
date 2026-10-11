@@ -2,6 +2,7 @@
   "name": "streampay-access-service",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "StreamPay high-performance off-chain payment gate & voucher settlement service",
   "main": "dist/server.js",
   "scripts": {

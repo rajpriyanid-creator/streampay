@@ -178,7 +178,7 @@ jobs:
           retention-days: 7
 
   envio-indexer:
-    name: Envio CLI Availability Check
+    name: Envio Indexer Codegen & Build
     runs-on: ubuntu-latest
 
     steps:
@@ -199,7 +199,7 @@ jobs:
           cd indexer
           pnpm install || npm install
 
-      - name: Verify Envio CLI Availability
+      - name: Run Envio codegen and build
         run: |
           cd indexer
-          npx envio --version
+          pnpm run build

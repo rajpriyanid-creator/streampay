@@ -2,6 +2,7 @@
   "name": "streampay-monad-suite",
   "version": "2.5.0",
   "private": true,
+  "license": "MIT",
   "description": "StreamPay Monad Bounded Escrow Pay-Per-Use Video Streaming Platform",
   "scripts": {
     "install:all": "npm install --prefix access-service && npm install --prefix frontend",

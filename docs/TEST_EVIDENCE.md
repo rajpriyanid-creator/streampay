@@ -331,6 +331,12 @@ npx tsx scripts/e2e/testnet-signing-safety.test.ts
 
 ## 7. Concurrency & Security Regression Test Evidence (2026-10-11)
 
+Current branch update: `fix/testnet-signing-deployment-safety` at `58eb0a5`.
+The checkpoint integration test now independently reads the contract after the
+checkpoint transaction and verifies that `/api/session/checkpoint-sync` returns
+the same fresh `settledUnits` value. This change is source-verified here; a
+full local-chain rerun is required to record new runtime evidence.
+
 ### Durable Persistence, Multi-Instance & Lock Concurrency Suite
 ```
 Command: npx tsx scripts/e2e/durable-persistence.test.ts

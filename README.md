@@ -113,3 +113,45 @@ forge test -vvv
 - [x] Reentrancy Guard Protection (`ReentrancyGuard`)
 - [x] Push-with-Pull Fallback Payouts (`claimable` mapping)
 
+## Monad Integration
+
+Monad is the target EVM network because low fees make frequent small payments practical, fast finality keeps checkpoint and close operations responsive, and EVM compatibility allows the project to use Solidity and viem.
+
+| Network | Chain ID | Settlement contract | Payment token | Explorer |
+|---|---:|---|---|---|
+| Local Anvil | 31337 | `manifests/local.json` | Local MockUSDC | — |
+| Monad Testnet | 10143 | `manifests/testnet.json` (unset until deployment) | Official testnet USDC: `0x534b2f3A21130d7a60830c2Df862319e593943A3` | [MonadVision](https://testnet.monadvision.com), [Monadscan](https://testnet.monadscan.com) |
+
+## Architecture
+
+The frontend signs EIP-712 session and voucher data, the access service validates vouchers and serves Merkle-bound media segments, and `StreamPaySettlement` checkpoints cumulative usage and handles cooperative or challenged close/refund flows.
+
+## Tech Stack
+
+- Solidity and Foundry for escrow settlement and invariant tests.
+- TypeScript, viem, and Express for the access service and protocol client.
+- Next.js, React, and HLS.js for the playback UI.
+- Anvil for local-chain lifecycle tests; Envio configuration is under `indexer/`.
+
+## Setup
+
+```bash
+npm ci
+npm ci --prefix access-service
+npm ci --prefix frontend
+npm run build
+```
+
+## AI Tools Disclosure
+
+AI coding assistants were used during development. The team reviewed the resulting code and ran the documented automated tests and builds.
+
+## Originality and Build Window
+
+The StreamPay application, contract integration, access service, frontend flow, tests, and documentation were built and refined between September 1 and October 13, 2026. No pre-existing application code is claimed as part of this submission; third-party libraries remain subject to their own licenses.
+
+## Known limitations
+
+- Monad testnet deployment is not complete; the testnet manifest intentionally has no settlement contract address.
+- The protocol has not undergone an independent security audit.
+- The local in-memory and filesystem stores are development/test implementations and are not suitable as the sole production coordination layer.

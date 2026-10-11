@@ -19,6 +19,7 @@
  */
 
 import { openSession, signVoucher, checkpoint, closeCooperative } from '../../frontend/lib/protocol/lifecycle';
+import { readSession } from '../../access-service/src/chain';
 import {
   createPublicClient,
   http,
@@ -361,10 +362,14 @@ async function main() {
   });
   if (!cpSyncRes.ok) throw new Error(`Checkpoint sync failed: ${cpSyncRes.status}`);
   const cpSyncData = await cpSyncRes.json();
-  if (cpSyncData.settledUnits !== '2') {
-    throw new Error(`Expected settledUnits: '2', got ${cpSyncData.settledUnits}`);
+  const freshOnChainSession = await readSession(sessionId);
+  if (!freshOnChainSession || freshOnChainSession.settledUnits !== 2n) {
+    throw new Error(`Fresh on-chain read did not report settledUnits=2: ${freshOnChainSession?.settledUnits}`);
   }
-  console.log('  ✅ Checkpoint sync confirmed by Access Service (settledUnits: 2)');
+  if (cpSyncData.settledUnits !== freshOnChainSession.settledUnits.toString()) {
+    throw new Error(`Checkpoint sync was stale: on-chain=${freshOnChainSession.settledUnits}, sync=${cpSyncData.settledUnits}`);
+  }
+  console.log(`  ✅ Checkpoint sync returned fresh on-chain settledUnits=${cpSyncData.settledUnits}`);
 
   // 10. Later segment playback after checkpoint (Segment 1)
   console.log('\nStep 9: Streaming Segment 1 after checkpoint (cumulativeUnits: 4)...');
