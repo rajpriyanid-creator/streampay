@@ -24,6 +24,10 @@ import {
   hashTypedData,
   createWalletClient,
   custom,
+  encodeAbiParameters,
+  stringToBytes,
+  concat,
+  recoverTypedDataAddress,
 } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import {
@@ -291,6 +295,44 @@ async function runTests() {
       verifyingContract: MOCK_SETTLEMENT,
     };
 
+    // Exact Solidity Typehashes from contracts/src/StreamPaySettlement.sol
+    const CONTENT_OFFER_TYPEHASH = keccak256(
+      stringToBytes(
+        'ContentOffer(address recipient,address token,bytes32 contentIdHash,bytes32 pricingPolicyHash,uint256 unitPrice,uint64 maxBillableUnits,bytes32 manifestRoot,uint8 maxCreditSegments,uint64 maxCreditWindowUnits,uint256 maxUnredeemedAmount,uint256 offerNonce,uint64 issuedAt,uint64 expiresAt)'
+      )
+    );
+    const SESSION_CONFIG_TYPEHASH = keccak256(
+      stringToBytes(
+        'SessionConfig(address payer,address sessionSigner,bytes32 offerDigest,uint256 initialDeposit,uint64 maxLeadUnits,uint64 validUntil,uint64 redemptionGraceSeconds,uint256 nonce)'
+      )
+    );
+    const CLOSE_ACK_TYPEHASH = keccak256(
+      stringToBytes('CloseAck(bytes32 sessionId,uint64 cumulativeUnits,bytes32 voucherDigest)')
+    );
+    const EIP712_DOMAIN_TYPEHASH = keccak256(
+      stringToBytes('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)')
+    );
+
+    // Exact OpenZeppelin EIP712 Domain Separator calculation
+    const expectedDomainSeparator = keccak256(
+      encodeAbiParameters(
+        [
+          { type: 'bytes32' },
+          { type: 'bytes32' },
+          { type: 'bytes32' },
+          { type: 'uint256' },
+          { type: 'address' },
+        ],
+        [
+          EIP712_DOMAIN_TYPEHASH,
+          keccak256(stringToBytes('StreamPaySettlement')),
+          keccak256(stringToBytes('2.5')),
+          BigInt(TESTNET_CHAIN_ID),
+          MOCK_SETTLEMENT,
+        ]
+      )
+    );
+
     const offer = buildContentOffer({
       recipient: '0x3333333333333333333333333333333333333333' as Address,
       token: MOCK_TOKEN,
@@ -311,7 +353,53 @@ async function runTests() {
       primaryType: 'ContentOffer',
       message: offer,
     });
-    assert(offerDigest.startsWith('0x') && offerDigest.length === 66, 'Invalid offerDigest format');
+
+    // Exact Solidity hashContentOffer implementation:
+    // _hashTypedDataV4(keccak256(abi.encode(CONTENT_OFFER_TYPEHASH, ...)))
+    const expectedOfferStructHash = keccak256(
+      encodeAbiParameters(
+        [
+          { type: 'bytes32' },
+          { type: 'address' },
+          { type: 'address' },
+          { type: 'bytes32' },
+          { type: 'bytes32' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'bytes32' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+        ],
+        [
+          CONTENT_OFFER_TYPEHASH,
+          offer.recipient,
+          offer.token,
+          offer.contentIdHash,
+          offer.pricingPolicyHash,
+          offer.unitPrice,
+          offer.maxBillableUnits,
+          offer.manifestRoot,
+          BigInt(offer.maxCreditSegments),
+          offer.maxCreditWindowUnits,
+          offer.maxUnredeemedAmount,
+          offer.offerNonce,
+          offer.issuedAt,
+          offer.expiresAt,
+        ]
+      )
+    );
+    const expectedOfferDigest = keccak256(
+      concat(['0x1901', expectedDomainSeparator, expectedOfferStructHash])
+    );
+    assert.strictEqual(
+      offerDigest,
+      expectedOfferDigest,
+      `ContentOffer digest mismatch: viem=${offerDigest} vs solidity=${expectedOfferDigest}`
+    );
 
     const config = {
       payer: '0x2222222222222222222222222222222222222222' as Address,
@@ -330,7 +418,43 @@ async function runTests() {
       primaryType: 'SessionConfig',
       message: config,
     });
-    assert(configDigest.startsWith('0x') && configDigest.length === 66, 'Invalid configDigest format');
+
+    // Exact Solidity hashSessionConfig implementation:
+    // _hashTypedDataV4(keccak256(abi.encode(SESSION_CONFIG_TYPEHASH, ...)))
+    const expectedConfigStructHash = keccak256(
+      encodeAbiParameters(
+        [
+          { type: 'bytes32' },
+          { type: 'address' },
+          { type: 'address' },
+          { type: 'bytes32' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+          { type: 'uint256' },
+        ],
+        [
+          SESSION_CONFIG_TYPEHASH,
+          config.payer,
+          config.sessionSigner,
+          config.offerDigest,
+          config.initialDeposit,
+          config.maxLeadUnits,
+          config.validUntil,
+          config.redemptionGraceSeconds,
+          config.nonce,
+        ]
+      )
+    );
+    const expectedConfigDigest = keccak256(
+      concat(['0x1901', expectedDomainSeparator, expectedConfigStructHash])
+    );
+    assert.strictEqual(
+      configDigest,
+      expectedConfigDigest,
+      `SessionConfig digest mismatch: viem=${configDigest} vs solidity=${expectedConfigDigest}`
+    );
 
     const ack = {
       sessionId: ('0x' + '11'.repeat(32)) as Hex,
@@ -344,18 +468,53 @@ async function runTests() {
       primaryType: 'CloseAck',
       message: ack,
     });
-    assert(ackDigest.startsWith('0x') && ackDigest.length === 66, 'Invalid ackDigest format');
 
-    console.log(`   ✅ ContentOffer EIP-712 digest: ${offerDigest.slice(0, 18)}...`);
-    console.log(`   ✅ SessionConfig EIP-712 digest: ${configDigest.slice(0, 18)}...`);
-    console.log(`   ✅ CloseAck EIP-712 digest:      ${ackDigest.slice(0, 18)}...`);
+    // Exact Solidity hashCloseAck implementation:
+    // _hashTypedDataV4(keccak256(abi.encode(CLOSE_ACK_TYPEHASH, ...)))
+    const expectedAckStructHash = keccak256(
+      encodeAbiParameters(
+        [
+          { type: 'bytes32' },
+          { type: 'bytes32' },
+          { type: 'uint256' },
+          { type: 'bytes32' },
+        ],
+        [
+          CLOSE_ACK_TYPEHASH,
+          ack.sessionId,
+          ack.cumulativeUnits,
+          ack.voucherDigest,
+        ]
+      )
+    );
+    const expectedAckDigest = keccak256(
+      concat(['0x1901', expectedDomainSeparator, expectedAckStructHash])
+    );
+    assert.strictEqual(
+      ackDigest,
+      expectedAckDigest,
+      `CloseAck digest mismatch: viem=${ackDigest} vs solidity=${expectedAckDigest}`
+    );
+
+    console.log(`   ✅ ContentOffer EIP-712 digest verified: ${offerDigest} === ${expectedOfferDigest}`);
+    console.log(`   ✅ SessionConfig EIP-712 digest verified: ${configDigest} === ${expectedConfigDigest}`);
+    console.log(`   ✅ CloseAck EIP-712 digest verified:      ${ackDigest} === ${expectedAckDigest}`);
   }
 
-  // Test 8: Genuine creator wallet signing flow
-  console.log('\nTest 8: Verifying genuine Creator wallet signing flow via signContentOfferWithWallet and signCloseAckWithWallet...');
+  // Test 8: Genuine creator wallet signing flow & cryptographic signature recovery
+  console.log('\nTest 8: Verifying genuine Creator wallet signing flow & cryptographic signature recovery...');
   {
     const creatorAccount = privateKeyToAccount(generatePrivateKey());
+    const domain = {
+      name: 'StreamPaySettlement',
+      version: '2.5',
+      chainId: BigInt(TESTNET_CHAIN_ID),
+      verifyingContract: MOCK_SETTLEMENT,
+    };
+
     const mockCreatorWallet = {
+      account: creatorAccount,
+      getChainId: async () => TESTNET_CHAIN_ID,
       signTypedData: async (args: any) => {
         return creatorAccount.signTypedData(args);
       },
@@ -375,23 +534,66 @@ async function runTests() {
       offer,
       account: creatorAccount.address,
     });
-    assert(offerSig.startsWith('0x') && offerSig.length === 132, 'Invalid offer signature format');
+
+    // 1. Recover signing address from ContentOffer signature
+    const recoveredOfferSigner = await recoverTypedDataAddress({
+      domain,
+      types: contentOfferTypes,
+      primaryType: 'ContentOffer',
+      message: offer,
+      signature: offerSig,
+    });
+    assert.strictEqual(
+      recoveredOfferSigner.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      `Recovered offer signer (${recoveredOfferSigner}) must match creator account (${creatorAccount.address})`
+    );
+
+    const ackMessage = {
+      sessionId: ('0x' + '11'.repeat(32)) as Hex,
+      cumulativeUnits: 14n,
+      voucherDigest: ('0x' + '22'.repeat(32)) as Hex,
+    };
 
     const ackSig = await signCloseAckWithWallet({
       walletClient: mockCreatorWallet,
       settlement: MOCK_SETTLEMENT,
       chainId: TESTNET_CHAIN_ID,
-      ack: {
-        sessionId: ('0x' + '11'.repeat(32)) as Hex,
-        cumulativeUnits: 14n,
-        voucherDigest: ('0x' + '22'.repeat(32)) as Hex,
-      },
+      ack: ackMessage,
       account: creatorAccount.address,
     });
-    assert(ackSig.startsWith('0x') && ackSig.length === 132, 'Invalid close ack signature format');
 
-    console.log(`   ✅ Genuine Creator ContentOffer signature: ${offerSig.slice(0, 18)}...`);
-    console.log(`   ✅ Genuine Creator CloseAck signature:     ${ackSig.slice(0, 18)}...`);
+    // 2. Recover signing address from CloseAck signature
+    const recoveredAckSigner = await recoverTypedDataAddress({
+      domain,
+      types: closeAckTypes,
+      primaryType: 'CloseAck',
+      message: ackMessage,
+      signature: ackSig,
+    });
+    assert.strictEqual(
+      recoveredAckSigner.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      `Recovered close ack signer (${recoveredAckSigner}) must match creator account (${creatorAccount.address})`
+    );
+
+    // 3. Negative check: Tampered message fails signer recovery
+    const tamperedRecoveredSigner = await recoverTypedDataAddress({
+      domain,
+      types: closeAckTypes,
+      primaryType: 'CloseAck',
+      message: { ...ackMessage, cumulativeUnits: ackMessage.cumulativeUnits + 50n },
+      signature: ackSig,
+    });
+    assert.notStrictEqual(
+      tamperedRecoveredSigner.toLowerCase(),
+      creatorAccount.address.toLowerCase(),
+      'Tampered close ack message must not recover creator address'
+    );
+
+    console.log(`   ✅ Recovered ContentOffer signer: ${recoveredOfferSigner} matches Creator: ${creatorAccount.address}`);
+    console.log(`   ✅ Recovered CloseAck signer:     ${recoveredAckSigner} matches Creator: ${creatorAccount.address}`);
+    console.log(`   ✅ Cryptographic recovery verified against EIP-712 typed-data signatures.`);
   }
 
   // Test 9: Static audit - verify zero Anvil keys leak into Testnet in frontend code

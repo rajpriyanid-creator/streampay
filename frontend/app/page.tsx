@@ -125,6 +125,33 @@ function validateOfferConfig(params: {
   return null;
 }
 
+/**
+ * Verify that the injected Web3 wallet is actively operating on the expected account and chainId.
+ * Prevents submitting transactions on the wrong network or from an unintended account.
+ */
+async function assertInjectedWalletState(expectedAccount: Hex, expectedChainId: number): Promise<void> {
+  if (typeof window === 'undefined' || !(window as any).ethereum) {
+    throw new Error('Injected Web3 wallet not found.');
+  }
+  const accounts = (await (window as any).ethereum.request({ method: 'eth_requestAccounts' })) as string[];
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No active wallet account found in injected provider.');
+  }
+  const activeAccount = accounts[0];
+  if (activeAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+    throw new Error(
+      `Wallet account mismatch: currently active on ${activeAccount.slice(0, 6)}...${activeAccount.slice(-4)}, but expected ${expectedAccount.slice(0, 6)}...${expectedAccount.slice(-4)}. Switch accounts in your wallet.`
+    );
+  }
+  const chainIdHex = (await (window as any).ethereum.request({ method: 'eth_chainId' })) as string;
+  const currentChainId = parseInt(chainIdHex, 16);
+  if (currentChainId !== expectedChainId) {
+    throw new Error(
+      `Wallet network mismatch: wallet is connected to chain ${currentChainId}, but active network requires chain ${expectedChainId}. Switch networks in your wallet.`
+    );
+  }
+}
+
 export default function StreamPayDashboard() {
   // Network Selection State
   const [networkMode, setNetworkMode] = useState<'LOCAL' | 'TESTNET'>('LOCAL');
@@ -136,7 +163,7 @@ export default function StreamPayDashboard() {
     '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
   );
   const [creatorOffer, setCreatorOffer] = useState<{ offer: any; signature: Hex } | null>(null);
-  const [creatorCloseAckSig, setCreatorCloseAckSig] = useState<Hex | null>(null);
+  const [creatorCloseAck, setCreatorCloseAck] = useState<{ cumulativeUnits: bigint; signature: Hex } | null>(null);
 
   const [contractAddress, setContractAddress] = useState<Hex>(
     (activeManifest.settlementContract || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Hex
@@ -230,29 +257,11 @@ export default function StreamPayDashboard() {
       return;
     }
     try {
-      const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
-      if (!accounts || accounts.length === 0) {
-        setStatusMsg({ text: 'No wallet account connected.', type: 'error' });
-        return;
-      }
-      const activeAccount = accounts[0] as Hex;
-      if (activeAccount.toLowerCase() !== recipientAddress.toLowerCase()) {
-        setStatusMsg({
-          text: `Wallet is currently active on ${activeAccount.slice(0, 6)}...${activeAccount.slice(-4)}, but Creator address is configured as ${recipientAddress.slice(0, 6)}...${recipientAddress.slice(-4)}. Switch to the Creator account in your wallet to sign.`,
-          type: 'warn',
-        });
-        return;
-      }
-      const chainIdHex = await (window as any).ethereum.request({ method: 'eth_chainId' });
-      const currentChainId = parseInt(chainIdHex, 16);
-      if (currentChainId !== activeManifest.chainId) {
-        setStatusMsg({ text: `Wrong network: connected to chain ${currentChainId}, need ${activeManifest.chainId}.`, type: 'error' });
-        return;
-      }
+      await assertInjectedWalletState(recipientAddress, activeManifest.chainId);
 
       setStatusMsg({ text: 'Prompting Creator wallet for EIP-712 ContentOffer signature...', type: 'info' });
       const walletClient = createWalletClient({
-        account: activeAccount,
+        account: recipientAddress,
         transport: custom((window as any).ethereum),
       });
 
@@ -272,7 +281,7 @@ export default function StreamPayDashboard() {
         settlement: contractAddress,
         chainId: activeManifest.chainId,
         offer,
-        account: activeAccount,
+        account: recipientAddress,
       });
 
       setCreatorOffer({ offer, signature });
@@ -295,25 +304,7 @@ export default function StreamPayDashboard() {
       return;
     }
     try {
-      const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
-      if (!accounts || accounts.length === 0) {
-        setStatusMsg({ text: 'No wallet account connected.', type: 'error' });
-        return;
-      }
-      const activeAccount = accounts[0] as Hex;
-      if (activeAccount.toLowerCase() !== session.recipient.toLowerCase()) {
-        setStatusMsg({
-          text: `Wallet is currently active on ${activeAccount.slice(0, 6)}..., but session Creator is ${session.recipient.slice(0, 6)}... Switch to the Creator account in your wallet to sign close authorization.`,
-          type: 'warn',
-        });
-        return;
-      }
-      const chainIdHex = await (window as any).ethereum.request({ method: 'eth_chainId' });
-      const currentChainId = parseInt(chainIdHex, 16);
-      if (currentChainId !== activeManifest.chainId) {
-        setStatusMsg({ text: `Wrong network: connected to chain ${currentChainId}, need ${activeManifest.chainId}.`, type: 'error' });
-        return;
-      }
+      await assertInjectedWalletState(session.recipient, activeManifest.chainId);
 
       const publicClient = createPublicClient({
         transport: http(activeManifest.rpcHttp),
@@ -328,7 +319,7 @@ export default function StreamPayDashboard() {
       })) as Hex;
 
       const walletClient = createWalletClient({
-        account: activeAccount,
+        account: session.recipient,
         transport: custom((window as any).ethereum),
       });
 
@@ -337,12 +328,15 @@ export default function StreamPayDashboard() {
         settlement: contractAddress,
         chainId: activeManifest.chainId,
         ack: { sessionId: session.sessionId, cumulativeUnits, voucherDigest },
-        account: activeAccount,
+        account: session.recipient,
       });
 
-      setCreatorCloseAckSig(ackSig);
+      setCreatorCloseAck({
+        cumulativeUnits,
+        signature: ackSig,
+      });
       setStatusMsg({
-        text: `✅ Close authorization signed by Creator! Switch wallet to Payer account to submit Close & Refund On-Chain.`,
+        text: `✅ Close authorization signed by Creator for ${cumulativeUnits} units! Switch wallet to Payer account to submit Close & Refund On-Chain.`,
         type: 'success',
       });
     } catch (err: any) {
@@ -363,11 +357,11 @@ export default function StreamPayDashboard() {
       setPayerAddress(null);
       setRecipientAddress('' as Hex);
       setCreatorOffer(null);
-      setCreatorCloseAckSig(null);
+      setCreatorCloseAck(null);
     } else {
       setRecipientAddress('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
       setCreatorOffer(null);
-      setCreatorCloseAckSig(null);
+      setCreatorCloseAck(null);
     }
   }, [networkMode]);
 
@@ -479,14 +473,7 @@ export default function StreamPayDashboard() {
           return;
         }
 
-        const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
-        if (!accounts || accounts.length === 0 || (accounts[0] as string).toLowerCase() !== payerAddress.toLowerCase()) {
-          setStatusMsg({
-            text: `Wallet is currently on ${accounts && accounts[0] ? (accounts[0] as string).slice(0, 6) : 'unknown'}..., but Payer is ${payerAddress.slice(0, 6)}... Please switch back to the Payer account.`,
-            type: 'warn',
-          });
-          return;
-        }
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
 
         const ephemeralSignerKey = generatePrivateKey();
         const ephemeralSigner = privateKeyToAccount(ephemeralSignerKey);
@@ -547,6 +534,7 @@ export default function StreamPayDashboard() {
         setSession(newSession);
         setCurrentSegment(0);
         setCumulativeUnits(0n);
+        setCreatorCloseAck(null);
         setVoucherLogs([]);
 
         setStatusMsg({
@@ -607,6 +595,7 @@ export default function StreamPayDashboard() {
       setSession(newSession);
       setCurrentSegment(0);
       setCumulativeUnits(0n);
+      setCreatorCloseAck(null);
       setVoucherLogs([]);
 
       setStatusMsg({
@@ -687,6 +676,7 @@ export default function StreamPayDashboard() {
               ? BigInt(targetSeg.cumulativeUnits)
               : BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
             setCumulativeUnits(nextCumUnits);
+            setCreatorCloseAck(null); // Clear stale close authorization as stream has advanced
             setCurrentSegment(segIndex + 1);
 
             const newLog: VoucherLog = {
@@ -779,6 +769,7 @@ export default function StreamPayDashboard() {
           setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
           return;
         }
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
         setStatusMsg({ text: 'Submitting real checkpoint transaction via wallet on Monad Testnet...', type: 'info' });
         const walletClient = createWalletClient({
           account: payerAddress,
@@ -794,6 +785,7 @@ export default function StreamPayDashboard() {
           sessionId: session.sessionId!,
           cumulativeUnits,
           voucherSig: lastSig,
+          chainId: activeManifest.chainId,
           account: payerAddress,
         });
         txHash = res.txHash;
@@ -877,6 +869,7 @@ export default function StreamPayDashboard() {
       let txHash: Hex = ('0x' + '00'.repeat(32)) as Hex;
       let finalSettledAmount: bigint = cumulativeUnits * UNIT_PRICE;
       let finalRefundAmount: bigint = session.depositAmount - finalSettledAmount;
+      let verifiedOnChain = false;
 
       if (networkMode === 'TESTNET') {
         if (!payerAddress) {
@@ -887,22 +880,15 @@ export default function StreamPayDashboard() {
           setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
           return;
         }
-        if (!creatorCloseAckSig) {
+        if (!creatorCloseAck || creatorCloseAck.cumulativeUnits !== cumulativeUnits) {
           setStatusMsg({
-            text: 'Creator authorization signature required: Creator must sign close authorization before cooperative close. Switch to Creator wallet and click "Sign Close Authorization as Creator".',
+            text: `Creator authorization signature required: Creator must sign close authorization for current stream progress (${cumulativeUnits} units). Switch to Creator wallet and click "Sign Close Authorization as Creator".`,
             type: 'warn',
           });
           return;
         }
 
-        const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
-        if (!accounts || accounts.length === 0 || (accounts[0] as string).toLowerCase() !== payerAddress.toLowerCase()) {
-          setStatusMsg({
-            text: `Wallet is currently active on ${accounts && accounts[0] ? (accounts[0] as string).slice(0, 6) : 'unknown'}..., but Payer is ${payerAddress.slice(0, 6)}... Switch back to Payer account to submit close transaction.`,
-            type: 'warn',
-          });
-          return;
-        }
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
 
         setStatusMsg({ text: 'Submitting real closeCooperative transaction via wallet on Monad Testnet...', type: 'info' });
         const walletClient = createWalletClient({
@@ -919,7 +905,7 @@ export default function StreamPayDashboard() {
           sessionId: session.sessionId!,
           cumulativeUnits,
           voucherSig: lastSig,
-          ackSig: creatorCloseAckSig,
+          ackSig: creatorCloseAck.signature,
           chainId: activeManifest.chainId,
           account: payerAddress,
         });
@@ -937,6 +923,7 @@ export default function StreamPayDashboard() {
           if (onchainSession && onchainSession.settledAmount !== undefined) {
             finalSettledAmount = onchainSession.settledAmount;
             finalRefundAmount = session.depositAmount - finalSettledAmount;
+            verifiedOnChain = true;
           }
         } catch (e) {
           console.warn('Failed reading confirmed session state from contract:', e);
@@ -965,6 +952,7 @@ export default function StreamPayDashboard() {
           if (onchainSession && onchainSession.settledAmount !== undefined) {
             finalSettledAmount = onchainSession.settledAmount;
             finalRefundAmount = session.depositAmount - finalSettledAmount;
+            verifiedOnChain = true;
           }
         } catch (e) {
           console.warn('Failed reading confirmed session state:', e);
@@ -979,12 +967,24 @@ export default function StreamPayDashboard() {
         signerKey: undefined
       } : null));
 
-      setStatusMsg({
-        text: isDeployed
-          ? `Close Confirmed On-Chain! Tx: ${txHash.slice(0, 12)}... Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`
-          : `Simulated Close & Refund Completed! Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`,
-        type: 'success',
-      });
+      if (isDeployed) {
+        if (verifiedOnChain) {
+          setStatusMsg({
+            text: `Close Confirmed & Authoritatively Verified On-Chain! Tx: ${txHash.slice(0, 12)}... Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`,
+            type: 'success',
+          });
+        } else {
+          setStatusMsg({
+            text: `Close Transaction Confirmed On-Chain! Tx: ${txHash.slice(0, 12)}... (Authoritative payout state could not be verified via RPC; estimated Creator payout: ${formatUsdc(finalSettledAmount)} USDC, estimated refund: ${formatUsdc(finalRefundAmount)} USDC).`,
+            type: 'info',
+          });
+        }
+      } else {
+        setStatusMsg({
+          text: `Simulated Close & Refund Completed! Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`,
+          type: 'success',
+        });
+      }
     } catch (err: any) {
       setStatusMsg({ text: `Close failed: ${err.message}`, type: 'error' });
     }
@@ -1071,7 +1071,7 @@ export default function StreamPayDashboard() {
                 onChange={(e) => {
                   setRecipientAddress(e.target.value as Hex);
                   setCreatorOffer(null);
-                  setCreatorCloseAckSig(null);
+                  setCreatorCloseAck(null);
                 }}
                 placeholder="0x..."
                 disabled={session?.status === 'OPEN'}
@@ -1112,19 +1112,21 @@ export default function StreamPayDashboard() {
                   {session?.status === 'OPEN' && (
                     <button
                       onClick={handleSignCloseAckAsCreator}
-                      disabled={Boolean(creatorCloseAckSig)}
+                      disabled={Boolean(creatorCloseAck)}
                       style={{
-                        background: creatorCloseAckSig ? '#059669' : '#7c3aed',
+                        background: creatorCloseAck ? '#059669' : '#7c3aed',
                         color: '#fff',
                         border: 'none',
                         borderRadius: '6px',
                         padding: '8px 12px',
                         fontSize: '11px',
                         fontWeight: 'bold',
-                        cursor: creatorCloseAckSig ? 'default' : 'pointer',
+                        cursor: creatorCloseAck ? 'default' : 'pointer',
                       }}
                     >
-                      {creatorCloseAckSig ? '✅ Close Authorized by Creator' : 'Sign Close Authorization as Creator'}
+                      {creatorCloseAck
+                        ? `✅ Close Authorized for ${creatorCloseAck.cumulativeUnits} units`
+                        : 'Sign Close Authorization as Creator'}
                     </button>
                   )}
                 </div>

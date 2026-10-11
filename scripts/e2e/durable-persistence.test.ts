@@ -11,6 +11,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { privateKeyToAccount } from 'viem/accounts';
 import { type Hex } from 'viem';
 
@@ -337,21 +338,95 @@ async function runTests() {
     }
     console.log('  ✅ Concurrent writes preserved both sessions in state.json without lost updates');
 
-    // Verify concurrent simultaneous replay attempt across both instances
+    // Simultaneous first-use race test across separate instances
+    // Issue a brand-new token for Segment 3, then send simultaneous first-use requests to Instance A and Instance B
+    const sig3 = await signVoucher(sessionId, 8n);
+    const gateRes3 = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 3,
+        voucher: { sessionId, cumulativeUnits: '8', signature: sig3 },
+      }),
+    });
+    const gateData3: any = await gateRes3.json();
+    if (!gateRes3.ok || !gateData3.success) throw new Error('Failed to gate segment 3');
+
+    // Fire simultaneous first-use requests to Instance A and Instance B
+    const [firstUseA, firstUseB] = await Promise.all([
+      fetch(`${ACCESS_URL_A}${gateData3.contentUrl}`),
+      fetch(`${ACCESS_URL_B}${gateData3.contentUrl}`),
+    ]);
+    const statuses = [firstUseA.status, firstUseB.status].sort();
+    if (statuses[0] !== 200 || statuses[1] !== 403) {
+      throw new Error(`Expected atomic check-and-consume to produce [200, 403], got [${firstUseA.status}, ${firstUseB.status}]`);
+    }
+    console.log('  ✅ Simultaneous first-use race across instances resolved atomically: exactly 1 granted (200), 1 rejected (403)');
+
+    // Verify subsequent replay attempt across both instances also returns 403
     const [replay1, replay2] = await Promise.all([
-      fetch(`${ACCESS_URL_A}${gateDataA2.contentUrl}`),
-      fetch(`${ACCESS_URL_B}${gateDataA2.contentUrl}`),
+      fetch(`${ACCESS_URL_A}${gateData3.contentUrl}`),
+      fetch(`${ACCESS_URL_B}${gateData3.contentUrl}`),
     ]);
     if (replay1.status !== 403 || replay2.status !== 403) {
-      throw new Error(`Expected both concurrent replays to be rejected (403), got ${replay1.status} and ${replay2.status}`);
+      throw new Error(`Expected subsequent replays to be rejected (403), got ${replay1.status} and ${replay2.status}`);
     }
-    console.log('  ✅ Simultaneous cross-instance replay of consumed token strictly rejected (both returned 403)');
+    console.log('  ✅ Subsequent replays on both instances strictly rejected (both returned 403)');
   } finally {
     procA.kill('SIGKILL');
     procB.kill('SIGKILL');
     // Cleanup test data
     fs.rmSync(TEST_DIR, { recursive: true, force: true });
   }
+
+  // Test 5: Verifying fail-closed behavior on corrupted durable state file
+  console.log('\nTest 5: Verifying persistence corruption fails closed (refuses to start with blank replay state)...');
+  const corruptDir = path.join(os.tmpdir(), `streampay-corrupt-test-${Date.now()}`);
+  fs.mkdirSync(corruptDir, { recursive: true });
+  fs.writeFileSync(path.join(corruptDir, 'state.json'), '{"corrupted": true, broken json...');
+
+  const corruptProc = spawn(
+    'node',
+    [path.join(__dirname, '../../access-service/dist/server.js')],
+    {
+      env: {
+        ...process.env,
+        PORT: '4094',
+        SIMULATION_MODE: 'true',
+        DATA_STORE_DIR: corruptDir,
+        TOKEN_SECRET: 'test-secret-at-least-32-chars-long-1234567890',
+        NETWORK: 'local',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+
+  let corruptErrOutput = '';
+  corruptProc.stderr.on('data', (d) => { corruptErrOutput += d.toString(); });
+  corruptProc.stdout.on('data', (d) => { corruptErrOutput += d.toString(); });
+
+  const exitCode = await new Promise<number>((resolve) => {
+    corruptProc.on('exit', (code) => resolve(code ?? 0));
+    setTimeout(() => {
+      corruptProc.kill('SIGKILL');
+      resolve(-1);
+    }, 5000);
+  });
+
+  fs.rmSync(corruptDir, { recursive: true, force: true });
+  if (exitCode === 0) {
+    throw new Error('Server with corrupted state file unexpectedly started instead of failing closed!');
+  }
+  if (!corruptErrOutput.includes('CRITICAL: Corrupted durable state')) {
+    throw new Error(`Expected fail-closed error message, got: ${corruptErrOutput}`);
+  }
+  console.log(`  ✅ Corrupted state.json caused server to fail closed (exit code ${exitCode}) with fatal replay-protection error`);
 
   console.log('\n🎉 ALL Durable Persistence & Multi-Instance Tests PASSED!\n');
 }

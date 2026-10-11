@@ -323,6 +323,39 @@ export const closeAckTypes = {
   ],
 } as const;
 
+export async function assertWalletClientChainAndAccount(
+  walletClient: any,
+  expectedAccount: Address,
+  expectedChainId?: number
+): Promise<void> {
+  if (!walletClient) return;
+  if (expectedChainId !== undefined) {
+    let clientChainId: number | undefined;
+    if (typeof walletClient.getChainId === 'function') {
+      try { clientChainId = Number(await walletClient.getChainId()); } catch {}
+    } else if (walletClient.chain?.id) {
+      clientChainId = Number(walletClient.chain.id);
+    }
+    if (clientChainId !== undefined && clientChainId !== expectedChainId) {
+      throw new Error(`Wallet chain ID mismatch: connected wallet is on chain ${clientChainId}, but expected chain ID is ${expectedChainId}. Switch networks in your wallet.`);
+    }
+  }
+
+  let activeAccount: string | undefined;
+  if (typeof walletClient.getAddresses === 'function') {
+    try {
+      const addrs = await walletClient.getAddresses();
+      if (addrs && addrs.length > 0) activeAccount = addrs[0];
+    } catch {}
+  }
+  if (!activeAccount && walletClient.account?.address) {
+    activeAccount = walletClient.account.address;
+  }
+  if (activeAccount && activeAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+    throw new Error(`Wallet account mismatch: wallet is active on ${activeAccount}, but expected account is ${expectedAccount}. Switch accounts in your wallet.`);
+  }
+}
+
 export async function signContentOfferWithWallet(p: {
   walletClient: any;
   settlement: Address;
@@ -330,6 +363,7 @@ export async function signContentOfferWithWallet(p: {
   offer: any;
   account: Address;
 }): Promise<Hex> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
   const domain = {
     name: 'StreamPaySettlement',
     version: '2.5',
@@ -352,6 +386,7 @@ export async function signCloseAckWithWallet(p: {
   ack: { sessionId: Hex; cumulativeUnits: bigint; voucherDigest: Hex };
   account: Address;
 }): Promise<Hex> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
   const domain = {
     name: 'StreamPaySettlement',
     version: '2.5',
@@ -439,12 +474,15 @@ export async function openSessionWithWallet(p: {
     throw new Error('Contract constraint violation: payer cannot equal session signer (PayerEqualsSessionSigner)');
   }
 
-  // 2. Security validation: creatorKey / private keys are STRICTLY FORBIDDEN on testnet and non-local chains
+  // 2. Validate injected wallet account and chain match expected parameters
+  await assertWalletClientChainAndAccount(p.walletClient, payer, p.chainId);
+
+  // 3. Security validation: creatorKey / private keys are STRICTLY FORBIDDEN on testnet and non-local chains
   if (p.chainId !== 31337 && p.creatorKey) {
     throw new Error(`SECURITY VIOLATION: creatorKey / private keys are strictly forbidden on non-local chain ${p.chainId}. Testnet requires wallet-signed offerSignature.`);
   }
 
-  // 3. Ensure ERC-20 allowance via wallet
+  // 4. Ensure ERC-20 allowance via wallet
   const allow = (await pc.readContract({
     address: p.token,
     abi: approveAbi,
@@ -567,7 +605,9 @@ export async function checkpointWithWallet(p: {
   cumulativeUnits: bigint;
   voucherSig: Hex;
   account: Address;
+  chainId?: number;
 }): Promise<{ txHash: Hex; receipt: any }> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
   const txHash = await p.walletClient.writeContract({
     address: p.settlement,
     abi: checkpointAbi,
@@ -594,6 +634,8 @@ export async function closeCooperativeWithWallet(p: {
   chainId: number;
   account: Address;
 }): Promise<{ txHash: Hex; receipt: any }> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
+
   // Security validation: creatorKey forbidden outside local dev
   if (p.chainId !== 31337 && p.creatorKey) {
     throw new Error(`SECURITY VIOLATION: creatorKey / private keys are strictly forbidden on non-local chain ${p.chainId}. Testnet requires wallet-signed ackSig.`);

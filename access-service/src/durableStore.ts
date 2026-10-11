@@ -154,19 +154,25 @@ export function registerStores(stores: {
   restoreDurableState();
 }
 
+export interface LockInfo {
+  fd: number;
+  owner: string;
+}
+
 /**
  * Reads persisted state from disk.
+ * Throws on corrupted or unreadable state file to fail closed against replay attacks.
  */
 export function readDurableState(): FullDurableState | null {
   if (!isPersistenceEnabled()) return null;
   const statePath = getStateFilePath();
+  if (!fs.existsSync(statePath)) return null;
   try {
-    if (!fs.existsSync(statePath)) return null;
     const raw = fs.readFileSync(statePath, 'utf8');
     return JSON.parse(raw) as FullDurableState;
   } catch (err: any) {
-    console.warn(`Failed to read durable state from ${statePath}: ${err.message}`);
-    return null;
+    console.error(`FATAL: Failed to read durable state from ${statePath}: ${err.message}`);
+    throw new Error(`CRITICAL: Corrupted durable state at ${statePath}. Server failing closed to prevent replay vulnerabilities: ${err.message}`);
   }
 }
 
@@ -174,19 +180,25 @@ function getLockFilePath(): string {
   return path.join(config.DATA_STORE_DIR, 'state.json.lock');
 }
 
-function acquireLock(timeoutMs = 3000): number {
+export function acquireLock(timeoutMs = 5000): LockInfo {
   const lockPath = getLockFilePath();
+  const owner = `${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
       const fd = fs.openSync(lockPath, 'wx');
-      return fd;
+      try {
+        fs.writeFileSync(fd, owner, 'utf8');
+      } catch {}
+      return { fd, owner };
     } catch (err: any) {
       if (err.code === 'EEXIST') {
         try {
           const stat = fs.statSync(lockPath);
           if (Date.now() - stat.mtimeMs > 5000) {
-            fs.unlinkSync(lockPath);
+            try {
+              fs.unlinkSync(lockPath);
+            } catch {}
             continue;
           }
         } catch {}
@@ -200,14 +212,17 @@ function acquireLock(timeoutMs = 3000): number {
   throw new Error(`Timeout acquiring durable state lockfile: ${lockPath}`);
 }
 
-function releaseLock(fd: number): void {
+export function releaseLock(lock: LockInfo): void {
   const lockPath = getLockFilePath();
   try {
-    fs.closeSync(fd);
+    fs.closeSync(lock.fd);
   } catch {}
   try {
     if (fs.existsSync(lockPath)) {
-      fs.unlinkSync(lockPath);
+      const currentOwner = fs.readFileSync(lockPath, 'utf8').trim();
+      if (currentOwner === lock.owner) {
+        fs.unlinkSync(lockPath);
+      }
     }
   } catch {}
 }
@@ -339,9 +354,164 @@ export function restoreDurableState(): boolean {
 
     return true;
   } catch (err: any) {
-    console.warn(`Failed to restore durable state from ${statePath}: ${err.message}`);
-    return false;
+    console.error(`FATAL: Failed to restore durable state from ${statePath}: ${err.message}`);
+    throw new Error(`CRITICAL: Corrupted durable state at ${statePath}. Server failing closed to prevent replay vulnerabilities: ${err.message}`);
   }
+}
+
+/**
+ * Serializes and writes state while holding the process lockfile.
+ */
+function saveStateUnderLock(lock: LockInfo): void {
+  const nowS = Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
+
+  // 1. Serialize consumed tokens (prune expired)
+  const consumedTokens: Record<string, number> = {};
+  if (activeConsumedMap) {
+    for (const [sig, exp] of activeConsumedMap.entries()) {
+      if (exp >= nowS) {
+        consumedTokens[sig] = exp;
+      }
+    }
+  }
+
+  // 2. Serialize vouchers
+  const vouchers: Record<string, PersistedStoredVoucher> = {};
+  if (activeVouchersMap) {
+    for (const [key, v] of activeVouchersMap.entries()) {
+      vouchers[key] = {
+        sessionId: v.sessionId,
+        sessionSigner: v.sessionSigner,
+        recipient: v.recipient,
+        contractAddress: v.contractAddress,
+        chainId: v.chainId,
+        highestCumulativeUnits: v.highestCumulativeUnits.toString(),
+        deliveredCumulativeUnits: v.deliveredCumulativeUnits.toString(),
+        lastVoucher: {
+          sessionId: v.lastVoucher.sessionId,
+          cumulativeUnits: v.lastVoucher.cumulativeUnits.toString(),
+          signature: v.lastVoucher.signature,
+        },
+        lastDeliveredVoucher: v.lastDeliveredVoucher
+          ? {
+              sessionId: v.lastDeliveredVoucher.sessionId,
+              cumulativeUnits: v.lastDeliveredVoucher.cumulativeUnits.toString(),
+              signature: v.lastDeliveredVoucher.signature,
+            }
+          : undefined,
+        lastUpdated: v.lastUpdated,
+        totalServedSegments: v.totalServedSegments,
+      };
+    }
+  }
+
+  // 3. Serialize sessions
+  const sessions: Record<string, PersistedSessionState> = {};
+  if (activeSessionsMap) {
+    for (const [key, s] of activeSessionsMap.entries()) {
+      const reservations: Record<string, PersistedReservationEntry> = {};
+      const segToSig: Record<string, string> = {};
+
+      for (const [sig, r] of s.reservations.entries()) {
+        if (!r.delivered) {
+          reservations[sig] = {
+            token: r.token,
+            tokenSig: r.tokenSig,
+            segmentIndex: r.segmentIndex,
+            cumulativeUnits: r.cumulativeUnits.toString(),
+            expiresAtMs: r.expiresAtMs,
+            consumed: r.consumed,
+            delivered: r.delivered,
+          };
+          segToSig[String(r.segmentIndex)] = sig;
+        }
+      }
+
+      const deliveredTokens: Record<string, number> = {};
+      for (const [sig, ts] of s.deliveredTokens.entries()) {
+        deliveredTokens[sig] = ts;
+      }
+
+      sessions[key] = {
+        sessionId: s.sessionId,
+        lastCheckpointUnits: s.lastCheckpointUnits.toString(),
+        limits: {
+          maxCreditSegments: s.limits.maxCreditSegments,
+          maxCreditWindowUnits: s.limits.maxCreditWindowUnits.toString(),
+          maxUnredeemedAmount: s.limits.maxUnredeemedAmount.toString(),
+          unitPrice: s.limits.unitPrice.toString(),
+          maxBillableUnits: s.limits.maxBillableUnits.toString(),
+          deposit: s.limits.deposit.toString(),
+        },
+        reservations,
+        segmentToTokenSig: segToSig,
+        completedSegments: Array.from(s.completedSegments),
+        deliveredTokens,
+      };
+    }
+  }
+
+  // 4. Merge disk state to prevent lost updates from concurrent writers
+  const diskState = readDurableState();
+  if (diskState) {
+    if (diskState.consumedTokens) {
+      for (const [sig, exp] of Object.entries(diskState.consumedTokens)) {
+        if (exp >= nowS && !consumedTokens[sig]) {
+          consumedTokens[sig] = exp;
+          if (activeConsumedMap) activeConsumedMap.set(sig, exp);
+        }
+      }
+    }
+    if (diskState.vouchers) {
+      for (const [key, dv] of Object.entries(diskState.vouchers)) {
+        const mv = vouchers[key];
+        if (!mv) {
+          vouchers[key] = dv;
+        } else if (BigInt(dv.highestCumulativeUnits) > BigInt(mv.highestCumulativeUnits)) {
+          vouchers[key] = dv;
+        }
+      }
+    }
+    if (diskState.sessions) {
+      for (const [key, ds] of Object.entries(diskState.sessions)) {
+        const ms = sessions[key];
+        if (!ms) {
+          sessions[key] = ds;
+        } else {
+          const merged = new Set([...ms.completedSegments, ...(ds.completedSegments || [])]);
+          ms.completedSegments = Array.from(merged);
+          if (ds.deliveredTokens) {
+            for (const [sig, ts] of Object.entries(ds.deliveredTokens)) {
+              if (!ms.deliveredTokens[sig]) ms.deliveredTokens[sig] = ts;
+            }
+          }
+          if (ds.reservations) {
+            for (const [sig, r] of Object.entries(ds.reservations)) {
+              if (!ms.reservations[sig]) {
+                ms.reservations[sig] = r;
+              } else if (r.delivered && !ms.reservations[sig].delivered) {
+                ms.reservations[sig] = r;
+              }
+            }
+          }
+          if (BigInt(ds.lastCheckpointUnits) > BigInt(ms.lastCheckpointUnits)) {
+            ms.lastCheckpointUnits = ds.lastCheckpointUnits;
+          }
+        }
+      }
+    }
+  }
+
+  const payload: FullDurableState = {
+    version: '2.5',
+    savedAt: nowMs,
+    consumedTokens,
+    vouchers,
+    sessions,
+  };
+
+  writeDurableState(payload);
 }
 
 /**
@@ -353,159 +523,60 @@ export function saveAllDurableState(): void {
   if (!isPersistenceEnabled()) return;
 
   fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
-  const lockFd = acquireLock();
+  const lock = acquireLock();
   try {
-    const nowS = Math.floor(Date.now() / 1000);
-    const nowMs = Date.now();
-
-    // 1. Serialize consumed tokens (prune expired)
-    const consumedTokens: Record<string, number> = {};
-    if (activeConsumedMap) {
-      for (const [sig, exp] of activeConsumedMap.entries()) {
-        if (exp >= nowS) {
-          consumedTokens[sig] = exp;
-        }
-      }
-    }
-
-    // 2. Serialize vouchers
-    const vouchers: Record<string, PersistedStoredVoucher> = {};
-    if (activeVouchersMap) {
-      for (const [key, v] of activeVouchersMap.entries()) {
-        vouchers[key] = {
-          sessionId: v.sessionId,
-          sessionSigner: v.sessionSigner,
-          recipient: v.recipient,
-          contractAddress: v.contractAddress,
-          chainId: v.chainId,
-          highestCumulativeUnits: v.highestCumulativeUnits.toString(),
-          deliveredCumulativeUnits: v.deliveredCumulativeUnits.toString(),
-          lastVoucher: {
-            sessionId: v.lastVoucher.sessionId,
-            cumulativeUnits: v.lastVoucher.cumulativeUnits.toString(),
-            signature: v.lastVoucher.signature,
-          },
-          lastDeliveredVoucher: v.lastDeliveredVoucher
-            ? {
-                sessionId: v.lastDeliveredVoucher.sessionId,
-                cumulativeUnits: v.lastDeliveredVoucher.cumulativeUnits.toString(),
-                signature: v.lastDeliveredVoucher.signature,
-              }
-            : undefined,
-          lastUpdated: v.lastUpdated,
-          totalServedSegments: v.totalServedSegments,
-        };
-      }
-    }
-
-    // 3. Serialize sessions
-    const sessions: Record<string, PersistedSessionState> = {};
-    if (activeSessionsMap) {
-      for (const [key, s] of activeSessionsMap.entries()) {
-        const reservations: Record<string, PersistedReservationEntry> = {};
-        const segToSig: Record<string, string> = {};
-
-        for (const [sig, r] of s.reservations.entries()) {
-          if (!r.delivered) {
-            reservations[sig] = {
-              token: r.token,
-              tokenSig: r.tokenSig,
-              segmentIndex: r.segmentIndex,
-              cumulativeUnits: r.cumulativeUnits.toString(),
-              expiresAtMs: r.expiresAtMs,
-              consumed: r.consumed,
-              delivered: r.delivered,
-            };
-            segToSig[String(r.segmentIndex)] = sig;
-          }
-        }
-
-        const deliveredTokens: Record<string, number> = {};
-        for (const [sig, ts] of s.deliveredTokens.entries()) {
-          deliveredTokens[sig] = ts;
-        }
-
-        sessions[key] = {
-          sessionId: s.sessionId,
-          lastCheckpointUnits: s.lastCheckpointUnits.toString(),
-          limits: {
-            maxCreditSegments: s.limits.maxCreditSegments,
-            maxCreditWindowUnits: s.limits.maxCreditWindowUnits.toString(),
-            maxUnredeemedAmount: s.limits.maxUnredeemedAmount.toString(),
-            unitPrice: s.limits.unitPrice.toString(),
-            maxBillableUnits: s.limits.maxBillableUnits.toString(),
-            deposit: s.limits.deposit.toString(),
-          },
-          reservations,
-          segmentToTokenSig: segToSig,
-          completedSegments: Array.from(s.completedSegments),
-          deliveredTokens,
-        };
-      }
-    }
-
-    // 4. Merge disk state to prevent lost updates from concurrent writers
-    const diskState = readDurableState();
-    if (diskState) {
-      if (diskState.consumedTokens) {
-        for (const [sig, exp] of Object.entries(diskState.consumedTokens)) {
-          if (exp >= nowS && !consumedTokens[sig]) {
-            consumedTokens[sig] = exp;
-            if (activeConsumedMap) activeConsumedMap.set(sig, exp);
-          }
-        }
-      }
-      if (diskState.vouchers) {
-        for (const [key, dv] of Object.entries(diskState.vouchers)) {
-          const mv = vouchers[key];
-          if (!mv) {
-            vouchers[key] = dv;
-          } else if (BigInt(dv.highestCumulativeUnits) > BigInt(mv.highestCumulativeUnits)) {
-            vouchers[key] = dv;
-          }
-        }
-      }
-      if (diskState.sessions) {
-        for (const [key, ds] of Object.entries(diskState.sessions)) {
-          const ms = sessions[key];
-          if (!ms) {
-            sessions[key] = ds;
-          } else {
-            const merged = new Set([...ms.completedSegments, ...(ds.completedSegments || [])]);
-            ms.completedSegments = Array.from(merged);
-            if (ds.deliveredTokens) {
-              for (const [sig, ts] of Object.entries(ds.deliveredTokens)) {
-                if (!ms.deliveredTokens[sig]) ms.deliveredTokens[sig] = ts;
-              }
-            }
-            if (ds.reservations) {
-              for (const [sig, r] of Object.entries(ds.reservations)) {
-                if (!ms.reservations[sig]) {
-                  ms.reservations[sig] = r;
-                } else if (r.delivered && !ms.reservations[sig].delivered) {
-                  ms.reservations[sig] = r;
-                }
-              }
-            }
-            if (BigInt(ds.lastCheckpointUnits) > BigInt(ms.lastCheckpointUnits)) {
-              ms.lastCheckpointUnits = ds.lastCheckpointUnits;
-            }
-          }
-        }
-      }
-    }
-
-    const payload: FullDurableState = {
-      version: '2.5',
-      savedAt: nowMs,
-      consumedTokens,
-      vouchers,
-      sessions,
-    };
-
-    writeDurableState(payload);
+    saveStateUnderLock(lock);
   } finally {
-    releaseLock(lockFd);
+    releaseLock(lock);
+  }
+}
+
+/**
+ * Atomically checks whether a token has already been consumed (in memory or on disk)
+ * and marks it consumed under a shared process lockfile.
+ * Eliminates race conditions / TOCTOU vulnerabilities across multiple instances.
+ * Returns true if the token was unconsumed and successfully marked consumed.
+ * Returns false if the token was already consumed.
+ */
+export function tryAtomicConsumeToken(
+  sig: string,
+  exp: number,
+  nowS = Math.floor(Date.now() / 1000)
+): boolean {
+  if (!isPersistenceEnabled()) {
+    if (activeConsumedMap?.has(sig)) return false;
+    activeConsumedMap?.set(sig, exp);
+    return true;
+  }
+
+  fs.mkdirSync(config.DATA_STORE_DIR, { recursive: true });
+  const lock = acquireLock();
+  try {
+    // 1. Check disk state
+    const diskState = readDurableState();
+    if (diskState?.consumedTokens && diskState.consumedTokens[sig] && diskState.consumedTokens[sig] >= nowS) {
+      if (activeConsumedMap) activeConsumedMap.set(sig, diskState.consumedTokens[sig]);
+      return false; // Already consumed on disk
+    }
+
+    // 2. Check in-memory store
+    if (activeConsumedMap && activeConsumedMap.has(sig)) {
+      const existingExp = activeConsumedMap.get(sig)!;
+      if (existingExp >= nowS) {
+        return false; // Already consumed in memory
+      }
+    }
+
+    // 3. Mark consumed in memory
+    if (activeConsumedMap) {
+      activeConsumedMap.set(sig, exp);
+    }
+
+    // 4. Save state to disk under this lock
+    saveStateUnderLock(lock);
+    return true;
+  } finally {
+    releaseLock(lock);
   }
 }
 
