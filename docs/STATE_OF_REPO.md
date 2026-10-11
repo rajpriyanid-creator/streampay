@@ -1,9 +1,9 @@
 # StreamPay v2.5 — State of Repository Baseline
 
 **Timestamp:** 2026-10-10  
-**Repository Branch:** `main`  
-**Latest HEAD Commit:** `88147563c910396402481586f8af616782601b84`  
-**Commit Message:** `feat(v2.5): complete production integration - real contract lifecycle, single-use tokens, unified Merkle tree, modular access service and e2e test suite`
+**Repository Branch:** `fix/testnet-signing-deployment-safety`
+**Latest HEAD Commit:** `c57b12e`
+**Commit Message:** `feat(ui): fail closed before testnet deployment`
 
 ---
 

@@ -1,7 +1,8 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** `f788688d130d0adb144968c2da332d0d776cc8a9` (preceding source fixes: `58178601121797b16870c0b587780e9809121a5b`, `80f0506124121d94de69d8a4980368bb583e726b`, `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
+**Branch:** `fix/testnet-signing-deployment-safety`
+**Commit:** `c57b12e`
 **GitHub Actions Runs:** [Run #38076882199](https://github.com/rajpriyanid-creator/streampay/actions/runs/38076882199) (Latest: **SUCCESS**), [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (**SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
@@ -293,7 +294,7 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 
 1. **Foundry tests on local Windows**: `forge` is not installed on this local Windows machine. The full Foundry test suite (39 tests across 2 test suites: `DeployDiscoveryTest` and `StreamPaySettlementTest`) is executed and passed in the Linux CI workflow (`.github/workflows/ci.yml`).
 2. **Monad Testnet Deployment**: No live testnet deployment was executed. Testnet faucet, token addresses, and contract deployment to chain 10143 remain blocked (**NOT DEPLOYED**).
-3. **Envio HyperIndex toolchain build**: Envio CLI was verified via CLI availability check (`npx envio --version`), but full indexer build was not executed since indexer runs on chain 31337 and requires Docker/WSL 2.
+3. **Envio HyperIndex toolchain build**: CI is configured to run Envio `2.32.12` codegen/build. The latest run failed because local chain `31337` lacked an explicit RPC source; that configuration is now fixed, but a fresh CI run is still required.
 
 ---
 
