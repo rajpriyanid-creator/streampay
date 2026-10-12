@@ -12,12 +12,12 @@
 ## 2. Why Monad?
 Traditional blockchains cannot support real-time video streaming payments:
 - Ethereum L1 fees and 12-second block times make continuous micro-payments economically impossible.
-- Most L2s lack the 10,000 TPS concurrency and sub-second finality needed when hundreds of thousands of concurrent viewers stream simultaneously.
+- Monad documentation describes high-throughput and parallel execution characteristics relevant to concurrent applications; StreamPay does not claim an unverified throughput or finality number. See https://docs.monad.xyz.
 
 **Monad makes StreamPay possible because:**
-1. **1-Second Block Times & MonadBFT Finality:** Viewers open sessions and claim escrow refunds in a single second. Checkpoint transactions confirm instantly.
-2. **Parallel EVM Execution:** Thousands of viewers can simultaneously open, checkpoint, and close micro-payment channels without RPC congestion or fee spikes.
-3. **Sub-Cent Gas Fees:** Batch settlement of hundreds of off-chain vouchers costs fractions of a cent on Monad, making micro-monetization viable for creators.
+1. **MonadBFT and execution architecture:** See the [Monad documentation](https://docs.monad.xyz); StreamPay uses bounded on-chain settlement with off-chain vouchers.
+2. **Parallel execution:** See the [Monad documentation](https://docs.monad.xyz); StreamPay keeps per-segment billing off-chain.
+3. **Measured costs:** Actual gas costs and confirmation times are deployment evidence, not assumptions; they remain pending until recorded from a real testnet run.
 
 ## 3. Key Architecture & Features
 - **Bounded Escrow Settlement Contract (`StreamPaySettlement.sol`):** Viewers deposit bounded escrow in USDC. Monotonic sequence counters and replay bitmaps prevent double-spending.
@@ -55,6 +55,6 @@ npm run dev:local
 ```
 
 ## 7. Submission Media
-- **Demo Video:** [Watch 3-minute Video Demo](DEMO_VIDEO_LINK_PLACEHOLDER)
-- **Live Demo:** [StreamPay Web App](LIVE_DEMO_LINK_PLACEHOLDER)
+- Demo video: coming (link added before deadline)
+- Live demo: coming (link added before deadline)
 - **GitHub Repository:** [rajpriyanid-creator/streampay](https://github.com/rajpriyanid-creator/streampay)
