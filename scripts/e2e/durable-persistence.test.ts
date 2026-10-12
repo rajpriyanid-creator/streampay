@@ -31,7 +31,7 @@ const ACCESS_URL_B = `http://localhost:${PORT_B}`;
 // Shared secret for multi-instance tests (at least 32 characters)
 const SHARED_SECRET = 'streampay_secure_shared_token_secret_for_cluster_testing_32chars';
 
-// Ephemeral keys for signing vouchers
+// Public Anvil test key. Never use on a real network.
 const signerAccount = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
 
 async function waitForServer(url: string, timeoutMs = 8000): Promise<boolean> {

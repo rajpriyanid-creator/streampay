@@ -37,7 +37,7 @@ const ACCESS_SERVICE_URL = process.env.ACCESS_SERVICE_URL || 'http://localhost:4
 const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS || 30000);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-// Known Anvil dev key — only allowed on local chain
+// Public Anvil test key. Never use on a real network.
 const KNOWN_ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
 function getRelayerKey(): Hex {

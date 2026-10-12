@@ -12,7 +12,9 @@
     "build:access": "npm run build --prefix access-service",
     "build:frontend": "npm run build --prefix frontend",
     "build": "npm run build:access && npm run build:frontend",
-    "typecheck": "npm --prefix access-service run typecheck && npm --prefix frontend run typecheck"
+    "typecheck": "npm --prefix access-service run typecheck && npm --prefix frontend run typecheck",
+    "quickstart:sim": "npm run build:access && node scripts/quickstart-sim.mjs",
+    "quickstart:testnet": "npm run build:access && node scripts/quickstart-testnet.mjs"
   },
 
   "dependencies": {

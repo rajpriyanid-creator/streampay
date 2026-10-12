@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { isAddress, getAddress, type Hex } from 'viem';
@@ -35,9 +36,46 @@ export let activeMode: 'onchain' | 'simulation' = 'simulation';
 export let activeSettlement: Hex | undefined = undefined;
 export let isChainReady = false;
 
+// ─── Structured Logging ──────────────────────────────────────────
+export function logStructured(level: 'info' | 'warn' | 'error', message: string, meta: Record<string, any> = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...meta,
+  };
+  if (level === 'error') {
+    console.error(JSON.stringify(entry));
+  } else if (level === 'warn') {
+    console.warn(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
+  }
+}
+
 const app = express();
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
 app.use(express.json());
+
+// ─── Request ID & Request Logging Middleware ───────────────────────
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const reqId = (req.headers['x-request-id'] as string) || crypto.randomUUID();
+  (req as any).id = reqId;
+  res.setHeader('X-Request-Id', reqId);
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api') || req.path === '/health') {
+      logStructured('info', 'HTTP request completed', {
+        requestId: reqId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - start,
+      });
+    }
+  });
+  next();
+});
 
 // ─── Admin Auth Middleware ─────────────────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -126,10 +164,12 @@ export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
   };
 }
 // ─── Health Check ────────────────────────────────────────────────
-app.get('/health', async (_req: Request, res: Response) => {
+app.get('/health', async (req: Request, res: Response) => {
   const isSim = activeMode === 'simulation';
+  const reqId = (req as any).id || (req.headers['x-request-id'] as string) || 'unknown';
   res.json({
     status: 'ok',
+    requestId: reqId,
     ready: isChainReady,
     service: 'StreamPay Access Service v2.5',
     mode: activeMode,
