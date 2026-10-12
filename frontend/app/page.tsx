@@ -41,7 +41,9 @@ const ACCESS_SERVICE_URL = process.env.NEXT_PUBLIC_ACCESS_SERVICE_URL || 'http:/
  * A per-session ephemeral signer key is generated fresh each session.
  */
 const ANVIL_CHAIN_ID = 31337;
+// Public Anvil test key. Never use on a real network.
 const ANVIL_ACCOUNTS = {
+  // Public Anvil test key. Never use on a real network.
   payer: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex,
   creator: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex,
   // Signer is always ephemeral — generated per session

@@ -7,6 +7,20 @@ on:
     branches: [ main ]
 
 jobs:
+  security-audit:
+    name: Gitleaks Secret Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   test-and-build:
     name: Core Contracts, Services & E2E Lifecycle
     runs-on: ubuntu-latest
@@ -48,6 +62,10 @@ jobs:
 
       - name: Build Frontend (Production)
         run: npm run build --prefix frontend
+
+      # Unit Tests
+      - name: Run Frontend AccountProvider Unit Tests
+        run: npm test --prefix frontend
 
       # Generate canonical manifest
       - name: Generate Canonical Merkle Manifest
@@ -95,13 +113,13 @@ jobs:
           ANVIL_PID=$!
           sleep 3
 
-          echo "Deploying StreamPaySettlement & MockUSDC..."
           cd contracts
+          # Public Anvil test key. Never use on a real network.
           DEPLOY_OUT=$(forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 2>&1)
           echo "$DEPLOY_OUT"
-          SETTLEMENT=$(echo "$DEPLOY_OUT" | grep -oP 'Settlement: \K0x[0-9a-fA-F]+' || true)
-          TOKEN=$(echo "$DEPLOY_OUT" | grep -oP 'Token: \K0x[0-9a-fA-F]+' || true)
           cd ..
+          SETTLEMENT=$(node -e "try { console.log(require('./contracts/deployment.json').settlementContract); } catch(e) { process.exit(1); }")
+          TOKEN=$(node -e "try { console.log(require('./contracts/deployment.json').paymentToken.address); } catch(e) { process.exit(1); }")
           cp contracts/deployment.json manifests/local.json 2>/dev/null || true
 
           if [ -z "$SETTLEMENT" ]; then
@@ -166,6 +184,30 @@ jobs:
           echo "Running Testnet Signing Safety & EIP-712 Verification Suite..."
           npx tsx scripts/e2e/testnet-signing-safety.test.ts
 
+          echo "Running Failure Demo Script..."
+          npx tsx scripts/failure-demo.ts
+
+      # Playwright Simulation Mode Smoke Test
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Run Playwright Simulation Smoke Test
+        run: |
+          PORT=3000 npm run start --prefix frontend &
+          FE_PID=$!
+          sleep 5
+          PLAYWRIGHT_TEST_BASE_URL=http://localhost:3000 npm run test:e2e --prefix frontend
+          kill $FE_PID || true
+
+      - name: Upload Playwright Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: frontend/screenshots/
+          retention-days: 7
+
       # Upload test artifacts
       - name: Upload Test Results
         if: always()
@@ -193,6 +235,21 @@ jobs:
         uses: pnpm/action-setup@v3
         with:
           version: 9
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Build Contracts for ABI
+        run: |
+          cd contracts
+          forge install foundry-rs/forge-std --no-commit 2>/dev/null || true
+          forge install OpenZeppelin/openzeppelin-contracts --no-commit 2>/dev/null || true
+          forge build
+          cd ..
+          mkdir -p indexer/abis
+          node -e "const fs = require('fs'); const artifact = JSON.parse(fs.readFileSync('contracts/out/StreamPaySettlement.sol/StreamPaySettlement.json', 'utf8')); fs.writeFileSync('indexer/abis/StreamPaySettlement.json', JSON.stringify(artifact.abi, null, 2));"
 
       - name: Install Indexer Dependencies
         run: |

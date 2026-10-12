@@ -48,6 +48,7 @@ const TESTNET_CHAIN_ID = 10143;
 const LOCAL_CHAIN_ID = 31337;
 const MOCK_SETTLEMENT = '0x1111111111111111111111111111111111111111' as Address;
 const MOCK_TOKEN = '0x534b2f3A21130d7a60830c2Df862319e593943A3' as Address;
+// Public Anvil test key. Never use on a real network.
 const ANVIL_DEV_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 
 function createMockClients() {
