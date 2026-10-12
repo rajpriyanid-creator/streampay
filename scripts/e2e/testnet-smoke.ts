@@ -547,7 +547,7 @@ async function main() {
   evidenceContent += `| Step | Tx Hash | Block | Notes |\n`;
   evidenceContent += `| :--- | :--- | :--- | :--- |\n`;
   for (const r of evidenceRecords) {
-    evidenceContent += `| **${r.step}** | [\`${r.txHash?.slice(0, 18)}...\`](https://testnet.monadexplorer.com/tx/${r.txHash}) | \`${r.block}\` | ${r.notes} |\n`;
+    evidenceContent += `| **${r.step}** | [\`${r.txHash?.slice(0, 18)}...\`](https://testnet.monadvision.com/tx/${r.txHash}) | \`${r.block}\` | ${r.notes} |\n`;
   }
   evidenceContent += `\n## Negative Security Cases Verified\n\n`;
   evidenceContent += `1. **Wrong Chain ID (1 vs 10143)**: Reverted with signature invalidation.\n`;
