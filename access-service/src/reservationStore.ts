@@ -26,6 +26,7 @@ export interface SessionLimits {
 export interface ReservationEntry {
   token: string;
   tokenSig: string;
+  voucherSignature: string;
   segmentIndex: number;
   cumulativeUnits: bigint;
   expiresAtMs: number;
@@ -64,7 +65,7 @@ export class SessionMutex {
   }
 }
 
-import { saveAllDurableState, syncFromDisk, clearDurableState } from './durableStore';
+import { saveAllDurableState, syncFromDisk, clearDurableState, withDurableStateLock } from './durableStore';
 
 export class ReservationLedger {
   private sessions = new Map<string, SessionState>();
@@ -147,7 +148,8 @@ export class ReservationLedger {
     tokenSig: string,
     ttlSec: number,
     onChainSettledUnits?: bigint,
-    nowMs = Date.now()
+    nowMs = Date.now(),
+    voucherSignature = ''
   ): Promise<{
     allowed: boolean;
     reason?: string;
@@ -155,7 +157,7 @@ export class ReservationLedger {
     existingToken?: string;
   }> {
     const mutex = this.getMutex(sessionId);
-    return mutex.acquire(async () => {
+    return mutex.acquire(async () => withDurableStateLock(async () => {
       syncFromDisk();
       const state = this.getOrCreateSession(sessionId, limits, onChainSettledUnits);
 
@@ -256,6 +258,7 @@ export class ReservationLedger {
       const newEntry: ReservationEntry = {
         token,
         tokenSig,
+        voucherSignature,
         segmentIndex,
         cumulativeUnits,
         expiresAtMs: nowMs + ttlSec * 1000,
@@ -268,7 +271,7 @@ export class ReservationLedger {
 
       saveAllDurableState();
       return { allowed: true };
-    });
+    }));
   }
 
   /**
@@ -293,14 +296,14 @@ export class ReservationLedger {
    * Safely deletes in-flight reservation and records bounded replay token history.
    * Returns cumulative units of the delivered reservation.
    */
-  async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<{ cumulativeUnits?: bigint }> {
+  async onDeliveryCompleted(sessionId: string, tokenSig: string, segmentIndex: number): Promise<{ voucher?: { sessionId: string; cumulativeUnits: bigint; signature: string } }> {
     const mutex = this.getMutex(sessionId);
     return mutex.acquire(async () => {
       syncFromDisk();
       const state = this.sessions.get(sessionId.toLowerCase());
       if (!state) return {};
       const res = state.reservations.get(tokenSig);
-      const units = res?.cumulativeUnits;
+      if (!res || res.segmentIndex !== segmentIndex || res.delivered) return {};
       state.reservations.delete(tokenSig);
       state.completedSegments.add(segmentIndex);
       state.segmentToTokenSig.delete(segmentIndex);
@@ -311,7 +314,11 @@ export class ReservationLedger {
         if (oldest) state.deliveredTokens.delete(oldest);
       }
       saveAllDurableState();
-      return { cumulativeUnits: units };
+      return { voucher: {
+        sessionId: state.sessionId,
+        cumulativeUnits: res.cumulativeUnits,
+        signature: res.voucherSignature,
+      } };
     });
   }
 

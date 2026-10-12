@@ -160,9 +160,10 @@ export async function initChain(): Promise<number> {
 const cache = new Map<string, { at: number; value: OnChainSession }>();
 const CACHE_MS = 1500;
 
-export async function readSession(sessionId: Hex): Promise<OnChainSession | null> {
+export async function readSession(sessionId: Hex, opts: { fresh?: boolean } = {}): Promise<OnChainSession | null> {
   if (!config.settlementAddress) return null;
   const key = sessionId.toLowerCase();
+  if (opts.fresh) cache.delete(key);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   try {

@@ -284,6 +284,24 @@ export async function closeCooperative(p: {
 
 // ─── Wallet-Client Based Lifecycle Helpers (Testnet / Injected Wallet) ───
 
+export const contentOfferTypes = {
+  ContentOffer: [
+    { name: 'recipient', type: 'address' },
+    { name: 'token', type: 'address' },
+    { name: 'contentIdHash', type: 'bytes32' },
+    { name: 'pricingPolicyHash', type: 'bytes32' },
+    { name: 'unitPrice', type: 'uint256' },
+    { name: 'maxBillableUnits', type: 'uint64' },
+    { name: 'manifestRoot', type: 'bytes32' },
+    { name: 'maxCreditSegments', type: 'uint8' },
+    { name: 'maxCreditWindowUnits', type: 'uint64' },
+    { name: 'maxUnredeemedAmount', type: 'uint256' },
+    { name: 'offerNonce', type: 'uint256' },
+    { name: 'issuedAt', type: 'uint64' },
+    { name: 'expiresAt', type: 'uint64' },
+  ],
+} as const;
+
 export const sessionConfigTypes = {
   SessionConfig: [
     { name: 'payer', type: 'address' },
@@ -296,6 +314,126 @@ export const sessionConfigTypes = {
     { name: 'nonce', type: 'uint256' },
   ],
 } as const;
+
+export const closeAckTypes = {
+  CloseAck: [
+    { name: 'sessionId', type: 'bytes32' },
+    { name: 'cumulativeUnits', type: 'uint64' },
+    { name: 'voucherDigest', type: 'bytes32' },
+  ],
+} as const;
+
+export async function assertWalletClientChainAndAccount(
+  walletClient: any,
+  expectedAccount: Address,
+  expectedChainId?: number
+): Promise<void> {
+  if (!walletClient) return;
+  if (expectedChainId !== undefined) {
+    let clientChainId: number | undefined;
+    if (typeof walletClient.getChainId === 'function') {
+      try { clientChainId = Number(await walletClient.getChainId()); } catch {}
+    } else if (walletClient.chain?.id) {
+      clientChainId = Number(walletClient.chain.id);
+    }
+    if (clientChainId !== undefined && clientChainId !== expectedChainId) {
+      throw new Error(`Wallet chain ID mismatch: connected wallet is on chain ${clientChainId}, but expected chain ID is ${expectedChainId}. Switch networks in your wallet.`);
+    }
+  }
+
+  let activeAccount: string | undefined;
+  if (typeof walletClient.getAddresses === 'function') {
+    try {
+      const addrs = await walletClient.getAddresses();
+      if (addrs && addrs.length > 0) activeAccount = addrs[0];
+    } catch {}
+  }
+  if (!activeAccount && walletClient.account?.address) {
+    activeAccount = walletClient.account.address;
+  }
+  if (activeAccount && activeAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+    throw new Error(`Wallet account mismatch: wallet is active on ${activeAccount}, but expected account is ${expectedAccount}. Switch accounts in your wallet.`);
+  }
+}
+
+export async function signContentOfferWithWallet(p: {
+  walletClient: any;
+  settlement: Address;
+  chainId: number;
+  offer: any;
+  account: Address;
+}): Promise<Hex> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(p.chainId),
+    verifyingContract: p.settlement,
+  };
+  return await p.walletClient.signTypedData({
+    account: p.account,
+    domain,
+    types: contentOfferTypes,
+    primaryType: 'ContentOffer',
+    message: p.offer,
+  });
+}
+
+export async function signCloseAckWithWallet(p: {
+  walletClient: any;
+  settlement: Address;
+  chainId: number;
+  ack: { sessionId: Hex; cumulativeUnits: bigint; voucherDigest: Hex };
+  account: Address;
+}): Promise<Hex> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(p.chainId),
+    verifyingContract: p.settlement,
+  };
+  return await p.walletClient.signTypedData({
+    account: p.account,
+    domain,
+    types: closeAckTypes,
+    primaryType: 'CloseAck',
+    message: p.ack,
+  });
+}
+
+export function buildContentOffer(p: {
+  recipient: Address;
+  token: Address;
+  contentIdHash?: Hex;
+  pricingPolicyHash?: Hex;
+  unitPrice: bigint;
+  maxBillableUnits?: bigint;
+  manifestRoot: Hex;
+  maxCreditSegments?: number;
+  maxCreditWindowUnits?: bigint;
+  maxUnredeemedAmount?: bigint;
+  offerNonce?: bigint;
+  issuedAt?: bigint;
+  expiresAt?: bigint;
+}) {
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  return {
+    recipient: p.recipient,
+    token: p.token,
+    contentIdHash: p.contentIdHash || keccak256(Buffer.from('stream-content-monad-keynote-hd')),
+    pricingPolicyHash: p.pricingPolicyHash || CANONICAL_PRICING_POLICY_HASH,
+    unitPrice: p.unitPrice,
+    maxBillableUnits: p.maxBillableUnits !== undefined ? p.maxBillableUnits : 3600n,
+    manifestRoot: p.manifestRoot,
+    maxCreditSegments: p.maxCreditSegments !== undefined ? p.maxCreditSegments : 3,
+    maxCreditWindowUnits: p.maxCreditWindowUnits !== undefined ? p.maxCreditWindowUnits : 10n,
+    maxUnredeemedAmount: p.maxUnredeemedAmount !== undefined ? p.maxUnredeemedAmount : p.unitPrice * 10n,
+    offerNonce: p.offerNonce !== undefined ? p.offerNonce : now,
+    issuedAt: p.issuedAt !== undefined ? p.issuedAt : now,
+    expiresAt: p.expiresAt !== undefined ? p.expiresAt : now + 86400n,
+  };
+}
 
 export async function openSessionWithWallet(p: {
   walletClient: any;
@@ -317,6 +455,7 @@ export async function openSessionWithWallet(p: {
   maxCreditWindow: bigint;
   maxCreditSegments: number;
   maxUnredeemedAmount: bigint;
+  offer?: any;
   creatorKey?: Hex;
   offerSignature?: Hex;
   chainId: number;
@@ -327,7 +466,23 @@ export async function openSessionWithWallet(p: {
   const now = BigInt(Math.floor(Date.now() / 1000));
   const nonce = p.nonce !== undefined ? p.nonce : BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
 
-  // 1. Ensure ERC-20 allowance via wallet
+  // 1. Contract constraints: payer cannot equal recipient or sessionSigner
+  if (payer.toLowerCase() === p.recipient.toLowerCase()) {
+    throw new Error('Contract constraint violation: payer cannot equal recipient (PayerEqualsRecipient)');
+  }
+  if (payer.toLowerCase() === p.signerAddress.toLowerCase()) {
+    throw new Error('Contract constraint violation: payer cannot equal session signer (PayerEqualsSessionSigner)');
+  }
+
+  // 2. Validate injected wallet account and chain match expected parameters
+  await assertWalletClientChainAndAccount(p.walletClient, payer, p.chainId);
+
+  // 3. Security validation: creatorKey / private keys are STRICTLY FORBIDDEN on testnet and non-local chains
+  if (p.chainId !== 31337 && p.creatorKey) {
+    throw new Error(`SECURITY VIOLATION: creatorKey / private keys are strictly forbidden on non-local chain ${p.chainId}. Testnet requires wallet-signed offerSignature.`);
+  }
+
+  // 4. Ensure ERC-20 allowance via wallet
   const allow = (await pc.readContract({
     address: p.token,
     abi: approveAbi,
@@ -343,11 +498,14 @@ export async function openSessionWithWallet(p: {
       args: [p.settlement, p.deposit * 10n],
       account: payer,
     });
-    await pc.waitForTransactionReceipt({ hash: approveTx });
+    const approveReceipt = await pc.waitForTransactionReceipt({ hash: approveTx });
+    if (approveReceipt.status !== 'success') {
+      throw new Error(`ERC-20 token approval failed: ${approveTx}`);
+    }
   }
 
-  // 2. Prepare content offer
-  const offer = {
+  // 4. Prepare content offer
+  const offer = p.offer || {
     recipient: p.recipient,
     token: p.token,
     contentIdHash: p.contentIdHash || keccak256(Buffer.from('stream-content-monad-keynote-hd')),
@@ -363,6 +521,13 @@ export async function openSessionWithWallet(p: {
     expiresAt: now + 86400n,
   };
 
+  const domain = {
+    name: 'StreamPaySettlement',
+    version: '2.5',
+    chainId: BigInt(p.chainId),
+    verifyingContract: p.settlement,
+  };
+
   const offerDigest = (await pc.readContract({
     address: p.settlement,
     abi: hashOfferAbi,
@@ -373,14 +538,19 @@ export async function openSessionWithWallet(p: {
   let offerSig: Hex;
   if (p.offerSignature) {
     offerSig = p.offerSignature;
-  } else if (p.creatorKey) {
+  } else if (p.chainId === 31337 && p.creatorKey) {
     const creator = privateKeyToAccount(p.creatorKey);
-    offerSig = await creator.sign({ hash: offerDigest });
+    offerSig = await creator.signTypedData({
+      domain,
+      types: contentOfferTypes,
+      primaryType: 'ContentOffer',
+      message: offer,
+    });
   } else {
-    throw new Error('Creator signature or creatorKey required to open session with offer');
+    throw new Error('Creator signature (offerSignature) is required. On Testnet, creator must sign ContentOffer using their wallet.');
   }
 
-  // 3. Prepare session config
+  // 5. Prepare session config
   const cfg = {
     payer,
     sessionSigner: p.signerAddress,
@@ -399,14 +569,7 @@ export async function openSessionWithWallet(p: {
     args: [cfg],
   })) as Hex;
 
-  // 4. Wallet signs session config typed data
-  const domain = {
-    name: 'StreamPaySettlement',
-    version: '2.5',
-    chainId: BigInt(p.chainId),
-    verifyingContract: p.settlement,
-  };
-
+  // 6. Wallet signs session config typed data
   const cfgSig = await p.walletClient.signTypedData({
     account: payer,
     domain,
@@ -415,7 +578,7 @@ export async function openSessionWithWallet(p: {
     message: cfg,
   });
 
-  // 5. Submit openWithSignature transaction
+  // 7. Submit openWithSignature transaction
   const txHash = await p.walletClient.writeContract({
     address: p.settlement,
     abi: openAbi,
@@ -425,6 +588,10 @@ export async function openSessionWithWallet(p: {
   });
 
   const receipt = await pc.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') {
+    throw new Error(`openWithSignature transaction reverted on-chain: ${txHash}`);
+  }
+
   const sessionId = keccak256(encodeAbiParameters(parseAbiParameters('bytes32, bytes32'), [cfgDigest, offerDigest]));
 
   return { txHash, sessionId, receipt, signerAddress: p.signerAddress };
@@ -438,7 +605,9 @@ export async function checkpointWithWallet(p: {
   cumulativeUnits: bigint;
   voucherSig: Hex;
   account: Address;
-}): Promise<Hex> {
+  chainId?: number;
+}): Promise<{ txHash: Hex; receipt: any }> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
   const txHash = await p.walletClient.writeContract({
     address: p.settlement,
     abi: checkpointAbi,
@@ -446,8 +615,11 @@ export async function checkpointWithWallet(p: {
     args: [p.sessionId, { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }, p.voucherSig],
     account: p.account,
   });
-  await p.publicClient.waitForTransactionReceipt({ hash: txHash });
-  return txHash;
+  const receipt = await p.publicClient.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') {
+    throw new Error(`Checkpoint transaction reverted on-chain: ${txHash}`);
+  }
+  return { txHash, receipt };
 }
 
 export async function closeCooperativeWithWallet(p: {
@@ -459,8 +631,16 @@ export async function closeCooperativeWithWallet(p: {
   voucherSig: Hex;
   creatorKey?: Hex;
   ackSig?: Hex;
+  chainId: number;
   account: Address;
-}): Promise<Hex> {
+}): Promise<{ txHash: Hex; receipt: any }> {
+  await assertWalletClientChainAndAccount(p.walletClient, p.account, p.chainId);
+
+  // Security validation: creatorKey forbidden outside local dev
+  if (p.chainId !== 31337 && p.creatorKey) {
+    throw new Error(`SECURITY VIOLATION: creatorKey / private keys are strictly forbidden on non-local chain ${p.chainId}. Testnet requires wallet-signed ackSig.`);
+  }
+
   const pc = p.publicClient;
   const voucherDigest = (await pc.readContract({
     address: p.settlement,
@@ -469,20 +649,26 @@ export async function closeCooperativeWithWallet(p: {
     args: [{ sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }],
   })) as Hex;
   const ack = { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits, voucherDigest };
-  const ackDigest = (await pc.readContract({
-    address: p.settlement,
-    abi: hashCloseAckAbi,
-    functionName: 'hashCloseAck',
-    args: [ack],
-  })) as Hex;
 
   let finalAckSig: Hex;
   if (p.ackSig) {
     finalAckSig = p.ackSig;
-  } else if (p.creatorKey) {
-    finalAckSig = await privateKeyToAccount(p.creatorKey).sign({ hash: ackDigest });
+  } else if (p.chainId === 31337 && p.creatorKey) {
+    const domain = {
+      name: 'StreamPaySettlement',
+      version: '2.5',
+      chainId: BigInt(p.chainId),
+      verifyingContract: p.settlement,
+    };
+    const creator = privateKeyToAccount(p.creatorKey);
+    finalAckSig = await creator.signTypedData({
+      domain,
+      types: closeAckTypes,
+      primaryType: 'CloseAck',
+      message: ack,
+    });
   } else {
-    throw new Error('Creator signature or creatorKey required to authorize cooperative close acknowledgment');
+    throw new Error('Creator authorization signature (ackSig) is required for cooperative close. On Testnet, creator must sign CloseAck using their wallet.');
   }
 
   const txHash = await p.walletClient.writeContract({
@@ -492,6 +678,9 @@ export async function closeCooperativeWithWallet(p: {
     args: [p.sessionId, { sessionId: p.sessionId, cumulativeUnits: p.cumulativeUnits }, p.voucherSig, ack, finalAckSig],
     account: p.account,
   });
-  await pc.waitForTransactionReceipt({ hash: txHash });
-  return txHash;
+  const receipt = await pc.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') {
+    throw new Error(`closeCooperative transaction reverted on-chain: ${txHash}`);
+  }
+  return { txHash, receipt };
 }

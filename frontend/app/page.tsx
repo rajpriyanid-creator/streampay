@@ -21,7 +21,12 @@ import {
   openSessionWithWallet,
   checkpointWithWallet,
   closeCooperativeWithWallet,
+  signContentOfferWithWallet,
+  signCloseAckWithWallet,
+  buildContentOffer,
 } from '../lib/protocol/lifecycle';
+import { CANONICAL_PRICING_POLICY_HASH } from '../lib/protocol/typedData';
+import { STREAMPAY_SETTLEMENT_ABI } from '../lib/protocol/abi';
 import { createStreamPayFragmentLoader } from '../lib/hls/StreamPayFragmentLoader';
 
 // Network manifests
@@ -36,7 +41,9 @@ const ACCESS_SERVICE_URL = process.env.NEXT_PUBLIC_ACCESS_SERVICE_URL || 'http:/
  * A per-session ephemeral signer key is generated fresh each session.
  */
 const ANVIL_CHAIN_ID = 31337;
+// Public Anvil test key. Never use on a real network.
 const ANVIL_ACCOUNTS = {
+  // Public Anvil test key. Never use on a real network.
   payer: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex,
   creator: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex,
   // Signer is always ephemeral — generated per session
@@ -120,6 +127,33 @@ function validateOfferConfig(params: {
   return null;
 }
 
+/**
+ * Verify that the injected Web3 wallet is actively operating on the expected account and chainId.
+ * Prevents submitting transactions on the wrong network or from an unintended account.
+ */
+async function assertInjectedWalletState(expectedAccount: Hex, expectedChainId: number): Promise<void> {
+  if (typeof window === 'undefined' || !(window as any).ethereum) {
+    throw new Error('Injected Web3 wallet not found.');
+  }
+  const accounts = (await (window as any).ethereum.request({ method: 'eth_requestAccounts' })) as string[];
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No active wallet account found in injected provider.');
+  }
+  const activeAccount = accounts[0];
+  if (activeAccount.toLowerCase() !== expectedAccount.toLowerCase()) {
+    throw new Error(
+      `Wallet account mismatch: currently active on ${activeAccount.slice(0, 6)}...${activeAccount.slice(-4)}, but expected ${expectedAccount.slice(0, 6)}...${expectedAccount.slice(-4)}. Switch accounts in your wallet.`
+    );
+  }
+  const chainIdHex = (await (window as any).ethereum.request({ method: 'eth_chainId' })) as string;
+  const currentChainId = parseInt(chainIdHex, 16);
+  if (currentChainId !== expectedChainId) {
+    throw new Error(
+      `Wallet network mismatch: wallet is connected to chain ${currentChainId}, but active network requires chain ${expectedChainId}. Switch networks in your wallet.`
+    );
+  }
+}
+
 export default function StreamPayDashboard() {
   // Network Selection State
   const [networkMode, setNetworkMode] = useState<'LOCAL' | 'TESTNET'>('LOCAL');
@@ -130,6 +164,8 @@ export default function StreamPayDashboard() {
   const [recipientAddress, setRecipientAddress] = useState<Hex>(
     '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
   );
+  const [creatorOffer, setCreatorOffer] = useState<{ offer: any; signature: Hex } | null>(null);
+  const [creatorCloseAck, setCreatorCloseAck] = useState<{ cumulativeUnits: bigint; signature: Hex } | null>(null);
 
   const [contractAddress, setContractAddress] = useState<Hex>(
     (activeManifest.settlementContract || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Hex
@@ -187,7 +223,7 @@ export default function StreamPayDashboard() {
             }
             setPayerAddress(accounts[0] as Hex);
             setIsWalletConnected(true);
-            setStatusMsg({ text: `Connected Wallet: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)} on Monad Testnet`, type: 'success' });
+            setStatusMsg({ text: `Connected Payer Wallet: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)} on Monad Testnet`, type: 'success' });
           }
         } catch (err: any) {
           setStatusMsg({ text: `Wallet connection failed: ${err.message}`, type: 'error' });
@@ -203,6 +239,113 @@ export default function StreamPayDashboard() {
     }
   };
 
+  // ─── Creator Wallet Signing Actions (Testnet / Injected Wallet) ───
+  const handleSignOfferAsCreator = async () => {
+    if (typeof window === 'undefined' || !(window as any).ethereum) {
+      setStatusMsg({ text: 'Injected Web3 wallet not found. MetaMask/Rabby required.', type: 'error' });
+      return;
+    }
+    if (!recipientAddress || !recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
+      setStatusMsg({ text: 'Please enter a valid 0x Creator (Recipient) address first.', type: 'error' });
+      return;
+    }
+    if (payerAddress && payerAddress.toLowerCase() === recipientAddress.toLowerCase()) {
+      setStatusMsg({ text: 'Payer and Creator must be distinct addresses (contract constraint PayerEqualsRecipient).', type: 'error' });
+      return;
+    }
+    const manifestRoot: Hex = manifestData?.manifestRoot || manifestData?.merkleRoot;
+    if (!manifestRoot || manifestRoot === ('0x' + '00'.repeat(32))) {
+      setStatusMsg({ text: 'Manifest not loaded from access service. Ensure access service is running.', type: 'error' });
+      return;
+    }
+    try {
+      await assertInjectedWalletState(recipientAddress, activeManifest.chainId);
+
+      setStatusMsg({ text: 'Prompting Creator wallet for EIP-712 ContentOffer signature...', type: 'info' });
+      const walletClient = createWalletClient({
+        account: recipientAddress,
+        transport: custom((window as any).ethereum),
+      });
+
+      const offer = buildContentOffer({
+        recipient: recipientAddress as Address,
+        token: paymentTokenAddress,
+        manifestRoot,
+        unitPrice: UNIT_PRICE,
+        maxBillableUnits: 3600n,
+        maxCreditSegments: MAX_CREDIT_SEGMENTS,
+        maxCreditWindowUnits: MAX_CREDIT_WINDOW_UNITS,
+        maxUnredeemedAmount: MAX_UNREDEEMED,
+      });
+
+      const signature = await signContentOfferWithWallet({
+        walletClient,
+        settlement: contractAddress,
+        chainId: activeManifest.chainId,
+        offer,
+        account: recipientAddress,
+      });
+
+      setCreatorOffer({ offer, signature });
+      setStatusMsg({
+        text: `✅ ContentOffer successfully signed by Creator (${recipientAddress.slice(0, 6)}...)! Switch wallet back to Payer account to open session.`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setStatusMsg({ text: `Failed to sign ContentOffer as Creator: ${err.message}`, type: 'error' });
+    }
+  };
+
+  const handleSignCloseAckAsCreator = async () => {
+    if (!session || !session.sessionId) {
+      setStatusMsg({ text: 'No active session to close.', type: 'error' });
+      return;
+    }
+    if (typeof window === 'undefined' || !(window as any).ethereum) {
+      setStatusMsg({ text: 'Injected Web3 wallet not found.', type: 'error' });
+      return;
+    }
+    try {
+      await assertInjectedWalletState(session.recipient, activeManifest.chainId);
+
+      const publicClient = createPublicClient({
+        transport: http(activeManifest.rpcHttp),
+      });
+
+      setStatusMsg({ text: 'Computing voucher digest and prompting Creator for CloseAck signature...', type: 'info' });
+      const voucherDigest = (await publicClient.readContract({
+        address: contractAddress,
+        abi: STREAMPAY_SETTLEMENT_ABI,
+        functionName: 'hashVoucher',
+        args: [{ sessionId: session.sessionId, cumulativeUnits }],
+      })) as Hex;
+
+      const walletClient = createWalletClient({
+        account: session.recipient,
+        transport: custom((window as any).ethereum),
+      });
+
+      const ackSig = await signCloseAckWithWallet({
+        walletClient,
+        settlement: contractAddress,
+        chainId: activeManifest.chainId,
+        ack: { sessionId: session.sessionId, cumulativeUnits, voucherDigest },
+        account: session.recipient,
+      });
+
+      setCreatorCloseAck({
+        cumulativeUnits,
+        signature: ackSig,
+      });
+      setStatusMsg({
+        text: `✅ Close authorization signed by Creator for ${cumulativeUnits} units! Switch wallet to Payer account to submit Close & Refund On-Chain.`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setStatusMsg({ text: `Failed to sign CloseAck as Creator: ${err.message}`, type: 'error' });
+    }
+  };
+
   // Synchronize contract, token, and deployment when network mode changes
   useEffect(() => {
     const manifest = networkMode === 'TESTNET' ? testnetManifest : localManifest;
@@ -214,7 +357,39 @@ export default function StreamPayDashboard() {
     if (networkMode === 'TESTNET') {
       setIsWalletConnected(false);
       setPayerAddress(null);
+      setRecipientAddress('' as Hex);
+      setCreatorOffer(null);
+      setCreatorCloseAck(null);
+    } else {
+      setRecipientAddress('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+      setCreatorOffer(null);
+      setCreatorCloseAck(null);
     }
+  }, [networkMode]);
+
+  // Keep the UI fail-closed when the injected wallet changes account or chain.
+  useEffect(() => {
+    if (networkMode !== 'TESTNET' || typeof window === 'undefined' || !(window as any).ethereum) return;
+    const provider = (window as any).ethereum;
+    const onAccountsChanged = (accounts: string[]) => {
+      setPayerAddress((accounts?.[0] as Hex) || null);
+      setIsWalletConnected(Boolean(accounts?.[0]));
+      setCreatorOffer(null);
+      setCreatorCloseAck(null);
+    };
+    const onChainChanged = (chainId: string) => {
+      const numericChainId = parseInt(chainId, 16);
+      if (numericChainId !== 10143) {
+        setIsWalletConnected(false);
+        setStatusMsg({ text: `Wrong chain: connected to ${numericChainId}, need Monad Testnet (10143).`, type: 'error' });
+      }
+    };
+    provider.on?.('accountsChanged', onAccountsChanged);
+    provider.on?.('chainChanged', onChainChanged);
+    return () => {
+      provider.removeListener?.('accountsChanged', onAccountsChanged);
+      provider.removeListener?.('chainChanged', onChainChanged);
+    };
   }, [networkMode]);
 
   // Verify Bytecode Deployment on mount or network change
@@ -309,11 +484,29 @@ export default function StreamPayDashboard() {
           return;
         }
 
+        if (!creatorOffer) {
+          setStatusMsg({
+            text: 'Creator signature required: Creator must sign the ContentOffer before opening session. Switch to Creator wallet account and click "Sign Content Offer as Creator".',
+            type: 'warn',
+          });
+          return;
+        }
+
+        if (payerAddress.toLowerCase() === recipientAddress.toLowerCase()) {
+          setStatusMsg({
+            text: 'Payer and Creator cannot be the same address (contract constraint PayerEqualsRecipient).',
+            type: 'error',
+          });
+          return;
+        }
+
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
+
         const ephemeralSignerKey = generatePrivateKey();
         const ephemeralSigner = privateKeyToAccount(ephemeralSignerKey);
         const openedAt = Math.floor(Date.now() / 1000);
 
-        setStatusMsg({ text: 'Requesting wallet signatures (ERC-20 approval & EIP-712 session config)...', type: 'info' });
+        setStatusMsg({ text: 'Requesting Payer wallet signatures (ERC-20 approval & EIP-712 session config)...', type: 'info' });
 
         const walletClient = createWalletClient({
           account: payerAddress,
@@ -341,7 +534,8 @@ export default function StreamPayDashboard() {
           maxCreditWindow: MAX_CREDIT_WINDOW_UNITS,
           maxCreditSegments: MAX_CREDIT_SEGMENTS,
           maxUnredeemedAmount: MAX_UNREDEEMED,
-          creatorKey: ANVIL_ACCOUNTS.creator,
+          offer: creatorOffer.offer,
+          offerSignature: creatorOffer.signature,
           chainId: activeManifest.chainId,
         });
 
@@ -367,6 +561,7 @@ export default function StreamPayDashboard() {
         setSession(newSession);
         setCurrentSegment(0);
         setCumulativeUnits(0n);
+        setCreatorCloseAck(null);
         setVoucherLogs([]);
 
         setStatusMsg({
@@ -427,6 +622,7 @@ export default function StreamPayDashboard() {
       setSession(newSession);
       setCurrentSegment(0);
       setCumulativeUnits(0n);
+      setCreatorCloseAck(null);
       setVoucherLogs([]);
 
       setStatusMsg({
@@ -507,6 +703,7 @@ export default function StreamPayDashboard() {
               ? BigInt(targetSeg.cumulativeUnits)
               : BigInt((segIndex + 1) * Number(UNITS_PER_SEGMENT));
             setCumulativeUnits(nextCumUnits);
+            setCreatorCloseAck(null); // Clear stale close authorization as stream has advanced
             setCurrentSegment(segIndex + 1);
 
             const newLog: VoucherLog = {
@@ -596,9 +793,10 @@ export default function StreamPayDashboard() {
           return;
         }
         if (!isDeployed) {
-          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          setStatusMsg({ text: 'Testnet contract not deployed yet', type: 'warn' });
           return;
         }
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
         setStatusMsg({ text: 'Submitting real checkpoint transaction via wallet on Monad Testnet...', type: 'info' });
         const walletClient = createWalletClient({
           account: payerAddress,
@@ -607,15 +805,17 @@ export default function StreamPayDashboard() {
         const publicClient = createPublicClient({
           transport: http(activeManifest.rpcHttp),
         });
-        txHash = await checkpointWithWallet({
+        const res = await checkpointWithWallet({
           walletClient,
           publicClient,
           settlement: contractAddress,
           sessionId: session.sessionId!,
           cumulativeUnits,
           voucherSig: lastSig,
+          chainId: activeManifest.chainId,
           account: payerAddress,
         });
+        txHash = res.txHash;
         setLastTxHash(txHash);
       } else if (isDeployed) {
         txHash = await checkpoint({
@@ -694,15 +894,29 @@ export default function StreamPayDashboard() {
       }));
 
       let txHash: Hex = ('0x' + '00'.repeat(32)) as Hex;
+      let finalSettledAmount: bigint = cumulativeUnits * UNIT_PRICE;
+      let finalRefundAmount: bigint = session.depositAmount - finalSettledAmount;
+      let verifiedOnChain = false;
+
       if (networkMode === 'TESTNET') {
         if (!payerAddress) {
           setStatusMsg({ text: 'Connect wallet first', type: 'error' });
           return;
         }
         if (!isDeployed) {
-          setStatusMsg({ text: 'Monad Testnet contract pending deployment', type: 'warn' });
+          setStatusMsg({ text: 'Testnet contract not deployed yet', type: 'warn' });
           return;
         }
+        if (!creatorCloseAck || creatorCloseAck.cumulativeUnits !== cumulativeUnits) {
+          setStatusMsg({
+            text: `Creator authorization signature required: Creator must sign close authorization for current stream progress (${cumulativeUnits} units). Switch to Creator wallet and click "Sign Close Authorization as Creator".`,
+            type: 'warn',
+          });
+          return;
+        }
+
+        await assertInjectedWalletState(payerAddress, activeManifest.chainId);
+
         setStatusMsg({ text: 'Submitting real closeCooperative transaction via wallet on Monad Testnet...', type: 'info' });
         const walletClient = createWalletClient({
           account: payerAddress,
@@ -711,17 +925,36 @@ export default function StreamPayDashboard() {
         const publicClient = createPublicClient({
           transport: http(activeManifest.rpcHttp),
         });
-        txHash = await closeCooperativeWithWallet({
+        const res = await closeCooperativeWithWallet({
           walletClient,
           publicClient,
           settlement: contractAddress,
           sessionId: session.sessionId!,
           cumulativeUnits,
           voucherSig: lastSig,
-          creatorKey: ANVIL_ACCOUNTS.creator,
+          ackSig: creatorCloseAck.signature,
+          chainId: activeManifest.chainId,
           account: payerAddress,
         });
+        txHash = res.txHash;
         setLastTxHash(txHash);
+
+        // Authoritative on-chain session state verification
+        try {
+          const onchainSession = (await publicClient.readContract({
+            address: contractAddress,
+            abi: STREAMPAY_SETTLEMENT_ABI,
+            functionName: 'getSession',
+            args: [session.sessionId!],
+          })) as any;
+          if (onchainSession && onchainSession.settledAmount !== undefined) {
+            finalSettledAmount = onchainSession.settledAmount;
+            finalRefundAmount = session.depositAmount - finalSettledAmount;
+            verifiedOnChain = true;
+          }
+        } catch (e) {
+          console.warn('Failed reading confirmed session state from contract:', e);
+        }
       } else if (isDeployed) {
         setStatusMsg({ text: 'Submitting real closeCooperative transaction on-chain...', type: 'info' });
         txHash = await closeCooperative({
@@ -734,18 +967,51 @@ export default function StreamPayDashboard() {
           voucherSig: lastSig,
         });
         setLastTxHash(txHash);
+
+        try {
+          const publicClient = createPublicClient({ transport: http(activeManifest.rpcHttp) });
+          const onchainSession = (await publicClient.readContract({
+            address: contractAddress,
+            abi: STREAMPAY_SETTLEMENT_ABI,
+            functionName: 'getSession',
+            args: [session.sessionId!],
+          })) as any;
+          if (onchainSession && onchainSession.settledAmount !== undefined) {
+            finalSettledAmount = onchainSession.settledAmount;
+            finalRefundAmount = session.depositAmount - finalSettledAmount;
+            verifiedOnChain = true;
+          }
+        } catch (e) {
+          console.warn('Failed reading confirmed session state:', e);
+        }
       }
 
-      const totalSpent = cumulativeUnits * UNIT_PRICE;
-      const refundAmount = session.depositAmount - totalSpent;
+      setSession((prev) => (prev ? {
+        ...prev,
+        status: 'CLOSED',
+        settledAmount: finalSettledAmount,
+        txHash,
+        signerKey: undefined
+      } : null));
 
-      setSession((prev) => (prev ? { ...prev, status: 'CLOSED', txHash, signerKey: undefined } : null));
-      setStatusMsg({
-        text: isDeployed
-          ? `Close Confirmed! Tx: ${txHash.slice(0, 12)}... Creator paid ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`
-          : `Simulated Close & Refund Completed! Creator credited ${formatUsdc(totalSpent)} USDC. Payer refunded ${formatUsdc(refundAmount)} USDC.`,
-        type: 'success',
-      });
+      if (isDeployed) {
+        if (verifiedOnChain) {
+          setStatusMsg({
+            text: `Close Confirmed & Authoritatively Verified On-Chain! Tx: ${txHash.slice(0, 12)}... Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`,
+            type: 'success',
+          });
+        } else {
+          setStatusMsg({
+            text: `Close Transaction Confirmed On-Chain! Tx: ${txHash.slice(0, 12)}... (Authoritative payout state could not be verified via RPC; estimated Creator payout: ${formatUsdc(finalSettledAmount)} USDC, estimated refund: ${formatUsdc(finalRefundAmount)} USDC).`,
+            type: 'info',
+          });
+        }
+      } else {
+        setStatusMsg({
+          text: `Simulated Close & Refund Completed! Creator credited ${formatUsdc(finalSettledAmount)} USDC. Payer refunded ${formatUsdc(finalRefundAmount)} USDC.`,
+          type: 'success',
+        });
+      }
     } catch (err: any) {
       setStatusMsg({ text: `Close failed: ${err.message}`, type: 'error' });
     }
@@ -753,7 +1019,11 @@ export default function StreamPayDashboard() {
 
   const totalSpentUSDC = cumulativeUnits * UNIT_PRICE;
   const remainingBalance = session ? session.depositAmount - totalSpentUSDC : 0n;
-  const canOpenSession = isWalletConnected && payerAddress && (manifestData?.manifestRoot || manifestData?.merkleRoot) && (networkMode === 'LOCAL' || isDeployed);
+  const canOpenSession =
+    isWalletConnected &&
+    payerAddress &&
+    (manifestData?.manifestRoot || manifestData?.merkleRoot) &&
+    (networkMode === 'LOCAL' || (isDeployed && creatorOffer && recipientAddress && payerAddress.toLowerCase() !== recipientAddress.toLowerCase()));
 
   return (
     <main style={{ minHeight: '100vh', background: '#0a0d14', color: '#f3f4f6', fontFamily: 'sans-serif', padding: '24px' }}>
@@ -786,7 +1056,7 @@ export default function StreamPayDashboard() {
           >
             {isWalletConnected && payerAddress
               ? `Connected (${payerAddress.slice(0, 6)}...)`
-              : networkMode === 'TESTNET' ? 'Connect Wallet' : 'Use Anvil Dev Account'}
+              : networkMode === 'TESTNET' ? 'Connect Payer Wallet' : 'Use Anvil Dev Account'}
           </button>
         </div>
       </header>
@@ -805,6 +1075,12 @@ export default function StreamPayDashboard() {
         </div>
       )}
 
+      {networkMode === 'TESTNET' && !activeManifest.settlementContract && (
+        <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', background: '#78350f', border: '1px solid #b45309', color: '#fef3c7', fontWeight: 'bold' }}>
+          Testnet contract not deployed yet. Open, checkpoint, and close are disabled until `manifests/testnet.json` contains a verified settlement contract.
+        </div>
+      )}
+
       {statusMsg && (
         <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '24px', background: statusMsg.type === 'error' ? '#7f1d1d' : statusMsg.type === 'success' ? '#065f46' : statusMsg.type === 'warn' ? '#78350f' : '#1e3a8a' }}>
           {statusMsg.text}
@@ -818,6 +1094,78 @@ export default function StreamPayDashboard() {
           <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>1. Bounded Escrow Session</h2>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>
+                Creator (Recipient) Address {networkMode === 'TESTNET' ? '(Must differ from Payer)' : ''}
+              </label>
+              <input
+                type="text"
+                value={recipientAddress}
+                onChange={(e) => {
+                  setRecipientAddress(e.target.value as Hex);
+                  setCreatorOffer(null);
+                  setCreatorCloseAck(null);
+                }}
+                placeholder="0x..."
+                disabled={session?.status === 'OPEN'}
+                style={{ width: '100%', background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: '6px', padding: '8px 12px', fontSize: '12px' }}
+              />
+              {networkMode === 'TESTNET' && payerAddress && recipientAddress && payerAddress.toLowerCase() === recipientAddress.toLowerCase() && (
+                <div style={{ color: '#ef4444', fontSize: '11px', marginTop: '4px' }}>
+                  ⚠️ Payer and Creator cannot be identical (contract reverts PayerEqualsRecipient).
+                </div>
+              )}
+            </div>
+
+            {networkMode === 'TESTNET' && (
+              <div style={{ background: '#172554', border: '1px solid #1e40af', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#93c5fd' }}>
+                  Creator Wallet Authorization (EIP-712)
+                </div>
+                <div style={{ fontSize: '11px', color: '#bfdbfe', lineHeight: '1.4' }}>
+                  On Monad Testnet, development private keys are prohibited. The content offer and cooperative close must be authorized by the Creator wallet. Switch accounts in MetaMask/Rabby as needed.
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={handleSignOfferAsCreator}
+                    disabled={session?.status === 'OPEN' || Boolean(creatorOffer)}
+                    style={{
+                      background: creatorOffer ? '#059669' : '#2563eb',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '8px 12px',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                      cursor: session?.status === 'OPEN' || Boolean(creatorOffer) ? 'default' : 'pointer',
+                    }}
+                  >
+                    {creatorOffer ? '✅ Offer Signed by Creator' : 'Sign Content Offer as Creator'}
+                  </button>
+                  {session?.status === 'OPEN' && (
+                    <button
+                      onClick={handleSignCloseAckAsCreator}
+                      disabled={Boolean(creatorCloseAck)}
+                      style={{
+                        background: creatorCloseAck ? '#059669' : '#7c3aed',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        padding: '8px 12px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        cursor: creatorCloseAck ? 'default' : 'pointer',
+                      }}
+                    >
+                      {creatorCloseAck
+                        ? `✅ Close Authorized for ${creatorCloseAck.cumulativeUnits} units`
+                        : 'Sign Close Authorization as Creator'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div>
               <label style={{ display: 'block', color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>Escrow Deposit (USDC)</label>
               <input
@@ -857,6 +1205,10 @@ export default function StreamPayDashboard() {
             >
               {session?.status === 'OPEN'
                 ? 'Session Open'
+                : networkMode === 'TESTNET' && !creatorOffer
+                ? 'Creator Must Sign Offer First'
+                : networkMode === 'TESTNET' && payerAddress && recipientAddress && payerAddress.toLowerCase() === recipientAddress.toLowerCase()
+                ? 'Payer & Creator Must Differ'
                 : !canOpenSession
                 ? 'Connect Wallet & Load Manifest First'
                 : isDeployed
@@ -881,14 +1233,14 @@ export default function StreamPayDashboard() {
           <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
             <button
               onClick={handleCheckpointOnChain}
-              disabled={!session || session.status !== 'OPEN'}
+              disabled={!session || session.status !== 'OPEN' || (networkMode === 'TESTNET' && !isDeployed)}
               style={{ flex: 1, background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
               {isDeployed ? 'Checkpoint On-Chain' : 'Simulate Checkpoint'}
             </button>
             <button
               onClick={handleCloseSession}
-              disabled={!session || session.status === 'CLOSED'}
+              disabled={!session || session.status === 'CLOSED' || (networkMode === 'TESTNET' && !isDeployed)}
               style={{ flex: 1, background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '10px', fontWeight: 'bold', cursor: 'pointer' }}
             >
               {isDeployed ? 'Close & Refund On-Chain' : 'Simulate Close & Refund'}

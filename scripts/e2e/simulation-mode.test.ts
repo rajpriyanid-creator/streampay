@@ -18,6 +18,7 @@ import { type Hex } from 'viem';
 
 const TEST_PORT = 4099;
 const ACCESS_URL = `http://127.0.0.1:${TEST_PORT}`;
+// Public Anvil test key. Never use on a real network.
 const MOCK_SIGNER_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 
 async function sleep(ms: number) {

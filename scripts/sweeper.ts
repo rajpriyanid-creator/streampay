@@ -37,7 +37,7 @@ const ACCESS_SERVICE_URL = process.env.ACCESS_SERVICE_URL || 'http://localhost:4
 const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_MS || 30000);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
-// Known Anvil dev key — only allowed on local chain
+// Public Anvil test key. Never use on a real network.
 const KNOWN_ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
 function getRelayerKey(): Hex {
@@ -192,7 +192,9 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
         if (!latestVoucherRes.ok) continue;
 
         const sessionData = await latestVoucherRes.json();
-        const lastVoucher = sessionData.lastVoucher;
+        // Only a voucher attached to a completed delivery is settlement
+        // eligible. Issuance/reservation alone must never trigger payment.
+        const lastVoucher = sessionData.lastDeliveredVoucher;
 
         if (!lastVoucher || !lastVoucher.signature) continue;
 
@@ -225,14 +227,15 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
                 args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
                 chain: null,
               });
-              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+              if (receipt.status !== 'success') throw new Error(`Checkpoint reverted: ${txHash}`);
               processedCheckpoints.add(cpKey);
               stats.checkpointsSubmitted++;
               console.log(`[Sweeper] ✅ Checkpoint tx confirmed: ${txHash.slice(0, 12)}...`);
             } catch (txErr: any) {
-              // Idempotent: if the checkpoint already happened, just log and continue
-              console.warn(`[Sweeper] Checkpoint tx failed (may be already processed): ${txErr.message}`);
-              processedCheckpoints.add(cpKey);
+              // Failed, reverted, timed-out, and ambiguous submissions remain
+              // retryable. A later sweep re-reads chain state before retrying.
+              console.warn(`[Sweeper] Checkpoint tx failed; retaining for retry: ${txErr.message}`);
             }
           }
         }
@@ -249,13 +252,13 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
                 args: [sessionId, { sessionId, cumulativeUnits: voucherUnits }, lastVoucher.signature as Hex],
                 chain: null,
               });
-              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+              if (receipt.status !== 'success') throw new Error(`Challenge defense reverted: ${txHash}`);
               processedCheckpoints.add(cpKey);
               stats.checkpointsSubmitted++;
               console.log(`[Sweeper] ✅ Challenge defense tx confirmed: ${txHash.slice(0, 12)}...`);
             } catch (txErr: any) {
-              console.warn(`[Sweeper] Challenge defense failed: ${txErr.message}`);
-              processedCheckpoints.add(cpKey);
+              console.warn(`[Sweeper] Challenge defense failed; retaining for retry: ${txErr.message}`);
             }
           }
         }
@@ -273,13 +276,13 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
                 args: [sessionId],
                 chain: null,
               });
-              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+              if (receipt.status !== 'success') throw new Error(`Challenge finalization reverted: ${txHash}`);
               processedFinalizations.add(fKey);
               stats.finalizationsExecuted++;
               console.log(`[Sweeper] ✅ Finalize challenge tx confirmed: ${txHash.slice(0, 12)}...`);
             } catch (txErr: any) {
-              console.warn(`[Sweeper] Finalize challenge failed: ${txErr.message}`);
-              processedFinalizations.add(fKey);
+              console.warn(`[Sweeper] Finalize challenge failed; retaining for retry: ${txErr.message}`);
             }
           }
         }
@@ -297,13 +300,13 @@ export async function runSweeperCycle(): Promise<SweeperStats> {
                 args: [sessionId],
                 chain: null,
               });
-              await publicClient.waitForTransactionReceipt({ hash: txHash });
+              const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+              if (receipt.status !== 'success') throw new Error(`Expiry finalization reverted: ${txHash}`);
               processedFinalizations.add(fKey);
               stats.finalizationsExecuted++;
               console.log(`[Sweeper] ✅ Finalize expired tx confirmed: ${txHash.slice(0, 12)}...`);
             } catch (txErr: any) {
-              console.warn(`[Sweeper] Finalize expired failed: ${txErr.message}`);
-              processedFinalizations.add(fKey);
+              console.warn(`[Sweeper] Finalize expired failed; retaining for retry: ${txErr.message}`);
             }
           }
         }

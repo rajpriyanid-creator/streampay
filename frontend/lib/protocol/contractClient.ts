@@ -64,10 +64,11 @@ export async function verifySettlementContract(
   rpcHttp: string,
   contractAddress: Address,
   expectedChainId?: number,
-  expectedPaymentToken?: Address
+  expectedPaymentToken?: Address,
+  clientOverride?: any
 ): Promise<ContractVerificationResult> {
   try {
-    const client = getPublicClient(rpcHttp);
+    const client = clientOverride || getPublicClient(rpcHttp);
     const chainId = await client.getChainId();
     if (expectedChainId && chainId !== expectedChainId) {
       return { valid: false, chainId, error: `Chain ID mismatch: expected ${expectedChainId}, got ${chainId}` };

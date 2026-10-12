@@ -50,7 +50,7 @@ export const config = {
   corsOrigins: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
   adminToken: process.env.ADMIN_TOKEN || '',
-  streamIds: (process.env.STREAM_IDS || 'monad-keynote-hd').split(',').map((s) => s.trim()),
+  streamIds: (process.env.STREAM_IDS || 'monad-keynote-hd,demo-stream').split(',').map((s) => s.trim()).filter(Boolean),
   minUnitPrice: BigInt(process.env.MIN_UNIT_PRICE || '10000'),
   tokenTtlSec: Number(process.env.TOKEN_TTL_SEC || 60),
   clockSkewSec: Number(process.env.CLOCK_SKEW_SEC || 5),
@@ -61,4 +61,22 @@ export const config = {
   ENABLE_TEST_CLOCK: process.env.ENABLE_TEST_CLOCK === 'true',
   DATA_STORE_DIR: process.env.DATA_STORE_DIR !== undefined ? process.env.DATA_STORE_DIR : path.join(__dirname, '../../.streampay-data'),
   TOKEN_SECRET: process.env.TOKEN_SECRET,
+  TRUSTED_PROXY_HOPS: Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS || 0)),
 };
+
+export function validateRuntimeConfiguration(): void {
+  const nonLocal = config.NETWORK !== 'local';
+  const production = process.env.NODE_ENV === 'production';
+  if ((production || nonLocal) && config.DATA_STORE_DIR === 'memory') {
+    throw new Error('Fatal: durable DATA_STORE_DIR is required outside local development.');
+  }
+  if ((production || nonLocal) && config.SIMULATION_MODE) {
+    throw new Error('Fatal: SIMULATION_MODE is forbidden outside local development.');
+  }
+  if (nonLocal && !config.SETTLEMENT_ADDRESS) {
+    throw new Error('Fatal: a valid deployed SETTLEMENT_ADDRESS is required outside local development.');
+  }
+  if (config.TRUSTED_PROXY_HOPS && !Number.isInteger(config.TRUSTED_PROXY_HOPS)) {
+    throw new Error('Fatal: TRUSTED_PROXY_HOPS must be a non-negative integer.');
+  }
+}

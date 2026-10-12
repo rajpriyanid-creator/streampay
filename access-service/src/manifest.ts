@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
+import { config } from './config';
 
 export const UNITS_PER_SEGMENT = 2n;
 export const SEGMENT_DURATION_SEC = 2;
@@ -225,5 +226,5 @@ export function getSegment(streamId: string, index: number) {
 }
 
 export function getStreamIdList(): string[] {
-  return ['monad-keynote-hd', 'demo-stream'];
+  return config.streamIds.filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
 }

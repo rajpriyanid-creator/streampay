@@ -43,7 +43,12 @@ export class TestProvider implements AccountProvider {
   private account: Account;
   private sessionAccount: Account | null = null;
 
-  constructor(privateKey?: `0x${string}`) {
+  constructor(privateKey?: `0x${string}`, network?: string) {
+    const net = (network || process.env.NETWORK || process.env.NEXT_PUBLIC_NETWORK || '').toLowerCase();
+    if (net === 'testnet' || net === 'mainnet') {
+      throw new Error(`TestProvider is unavailable on ${net}. Injected wallet must be used on testnet and mainnet.`);
+    }
+    // Public Anvil test key. Never use on a real network.
     this.account = privateKeyToAccount(
       privateKey || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // Anvil account #0
     );

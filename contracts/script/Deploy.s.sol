@@ -5,34 +5,70 @@ import {Script, console} from "forge-std/Script.sol";
 import {StreamPaySettlement} from "../src/StreamPaySettlement.sol";
 import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 
+interface IERC20WithDecimals {
+    function decimals() external view returns (uint8);
+}
+
 contract Deploy is Script {
+    address public constant APPROVED_MONAD_TESTNET_USDC = 0x534b2f3A21130d7a60830c2Df862319e593943A3;
+    uint256 public constant LOCAL_CHAIN_ID = 31337;
+    uint256 public constant MONAD_TESTNET_CHAIN_ID = 10143;
+
+    error UnsupportedChain(uint256 chainId);
+    error MissingPaymentTokenForTestnet();
+    error InvalidTestnetToken(address provided, address expected);
+    error TokenHasNoBytecode(address token);
+    error UnexpectedDecimals(uint8 decimals, uint8 expected);
+
+    function validateAndResolveToken(address inputToken, uint256 chainId) public returns (address resolvedToken) {
+        if (chainId == LOCAL_CHAIN_ID) {
+            if (inputToken == address(0)) {
+                MockUSDC mock = new MockUSDC();
+                resolvedToken = address(mock);
+                // Mint 1000 USDC to default Anvil payer (account 0)
+                address anvilPayer = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
+                mock.mint(anvilPayer, 1_000_000_000); // 1000 USDC
+                console.log("MockUSDC deployed at:", resolvedToken);
+                console.log("Token:", resolvedToken);
+            } else {
+                if (inputToken.code.length == 0) revert TokenHasNoBytecode(inputToken);
+                uint8 dec = IERC20WithDecimals(inputToken).decimals();
+                if (dec != 6) revert UnexpectedDecimals(dec, 6);
+                resolvedToken = inputToken;
+            }
+        } else if (chainId == MONAD_TESTNET_CHAIN_ID) {
+            if (inputToken == address(0)) revert MissingPaymentTokenForTestnet();
+            if (inputToken != APPROVED_MONAD_TESTNET_USDC) {
+                revert InvalidTestnetToken(inputToken, APPROVED_MONAD_TESTNET_USDC);
+            }
+            if (inputToken.code.length == 0) revert TokenHasNoBytecode(inputToken);
+            uint8 dec = IERC20WithDecimals(inputToken).decimals();
+            if (dec != 6) revert UnexpectedDecimals(dec, 6);
+            resolvedToken = inputToken;
+        } else {
+            revert UnsupportedChain(chainId);
+        }
+    }
+
     function run() external {
-        address paymentToken = vm.envOr("PAYMENT_TOKEN", address(0));
+        address inputToken = vm.envOr("PAYMENT_TOKEN", address(0));
         address owner = vm.envOr("OWNER", msg.sender);
+        uint256 chainId = block.chainid;
 
         vm.startBroadcast();
 
-        if (paymentToken == address(0)) {
-            MockUSDC mock = new MockUSDC();
-            paymentToken = address(mock);
-            // Mint 1000 USDC to default Anvil payer (account 0)
-            address anvilPayer = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266;
-            mock.mint(anvilPayer, 1_000_000_000); // 1000 USDC
-            console.log("MockUSDC deployed at:", paymentToken);
-            console.log("Token:", paymentToken);
-        }
-
+        address paymentToken = validateAndResolveToken(inputToken, chainId);
         StreamPaySettlement settlement = new StreamPaySettlement(paymentToken, owner);
 
         console.log("StreamPaySettlement deployed at:", address(settlement));
         console.log("Settlement:", address(settlement));
         console.log("Payment token:", address(settlement.paymentToken()));
         console.log("Owner:", settlement.owner());
-        console.log("Chain ID:", block.chainid);
+        console.log("Chain ID:", chainId);
 
         vm.stopBroadcast();
 
-        _writeDeploymentArtifact(address(settlement), paymentToken, block.chainid, block.number);
+        _writeDeploymentArtifact(address(settlement), paymentToken, chainId, block.number);
     }
 
     function _writeDeploymentArtifact(
