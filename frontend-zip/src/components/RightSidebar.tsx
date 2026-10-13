@@ -11,6 +11,7 @@ import {
   CreditCard,
   Lock,
   RefreshCw,
+  Banknote,
 } from 'lucide-react';
 import {
   WalletState,
@@ -25,6 +26,8 @@ interface RightSidebarProps {
   onOpenSession: () => void;
   onCheckpointSession: () => void;
   onCloseSession: () => void;
+  onRefundSession?: () => void;
+  onClaimRefund?: () => void;
   creatorAddress: string;
   onCreatorAddressChange: (value: string) => void;
   onSignCreatorOffer: () => void;
@@ -42,6 +45,8 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   onOpenSession,
   onCheckpointSession,
   onCloseSession,
+  onRefundSession,
+  onClaimRefund,
   creatorAddress,
   onCreatorAddressChange,
   onSignCreatorOffer,
@@ -202,14 +207,25 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
 
         {/* CTA Button */}
         {session.status === 'inactive' || session.status === 'opening' || session.status === 'closed' ? (
-          <button
-            onClick={onOpenSession}
-            disabled={session.status === 'opening'}
-            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#d99b4d] to-[#be833a] hover:from-[#e2a85e] hover:to-[#cd9146] text-black font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(217,155,77,0.25)] transition-all active:scale-98 cursor-pointer disabled:opacity-50"
-          >
-            <CreditCard className="w-4 h-4 fill-black/20" />
-            <span>{session.status === 'opening' ? 'Opening Session...' : 'Open Payment Session'}</span>
-          </button>
+          <div className="space-y-2">
+            {session.status === 'closed' && Number(session.claimableUSDC) > 0 && onClaimRefund && (
+              <button
+                onClick={onClaimRefund}
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md"
+              >
+                <Banknote className="w-4 h-4" />
+                <span>Claim Refund ({session.claimableUSDC} USDC)</span>
+              </button>
+            )}
+            <button
+              onClick={onOpenSession}
+              disabled={session.status === 'opening'}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#d99b4d] to-[#be833a] hover:from-[#e2a85e] hover:to-[#cd9146] text-black font-bold text-xs flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(217,155,77,0.25)] transition-all active:scale-98 cursor-pointer disabled:opacity-50"
+            >
+              <CreditCard className="w-4 h-4 fill-black/20" />
+              <span>{session.status === 'opening' ? 'Opening Session...' : 'Open Payment Session'}</span>
+            </button>
+          </div>
         ) : (
           <div className="space-y-2">
             <button
@@ -220,6 +236,17 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               <RefreshCw className={`w-3.5 h-3.5 ${session.status === 'checkpointing' ? 'animate-spin' : ''}`} />
               <span>{session.status === 'checkpointing' ? 'Checkpointing...' : 'Checkpoint Session'}</span>
             </button>
+
+            <button
+              onClick={onRefundSession || onCloseSession}
+              disabled={session.status === 'closing'}
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-950 to-teal-950 hover:from-emerald-900 hover:to-teal-900 border border-emerald-700/60 text-emerald-300 font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              title="Refund unspent escrow and return to wallet"
+            >
+              <Banknote className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Refund Remaining Escrow</span>
+            </button>
+
             <button
               onClick={onCloseSession}
               disabled={session.status === 'closing'}

@@ -252,6 +252,20 @@ export default function App() {
   const handleRefreshClaimable = useCallback(() => { void protocolManager.refreshClaimableRefund().catch((error) => console.warn('Claimable refund lookup failed:', error)); }, []);
   const handleClaimRefund = async () => { try { const tx = await protocolManager.claimRefund(); alert(tx ? `Refund claimed. Tx Hash: ${tx}` : 'Refund claimed in simulation mode.'); } catch (err) { alert(err instanceof Error ? err.message : 'Refund claim failed'); } };
 
+  const handleRefundSession = async () => {
+    try {
+      const result = await protocolManager.refundSession();
+      setIsPlaying(false);
+      alert(
+        result.tx
+          ? `Escrow refund successfully executed on-chain!\nTx Hash: ${result.tx}\n${result.message}`
+          : `Escrow refund completed in simulation mode:\n${result.message}`
+      );
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Refund failed');
+    }
+  };
+
   const handleRefreshManifest = async () => {
     try {
       const m = await accessService.getManifest(currentStreamId);
@@ -378,6 +392,7 @@ export default function App() {
               onCheckpoint={handleCheckpointSession}
               onCloseSession={handleCloseSession}
               onClaimRefund={handleClaimRefund}
+              onRefundSession={handleRefundSession}
               onRefreshClaimable={handleRefreshClaimable}
               onOpenSession={() => setIsOpenSessionModal(true)}
               onSignCreatorClose={handleSignCreatorClose}
@@ -394,6 +409,7 @@ export default function App() {
               onCheckpoint={handleCheckpointSession}
               onCloseSession={handleCloseSession}
               onClaimRefund={handleClaimRefund}
+              onRefundSession={handleRefundSession}
               onRefreshClaimable={handleRefreshClaimable}
               onSignCreatorClose={handleSignCreatorClose}
               creatorCloseSigned={creatorState.closeAckSigned}
@@ -422,6 +438,8 @@ export default function App() {
           onOpenSession={() => setIsOpenSessionModal(true)}
           onCheckpointSession={handleCheckpointSession}
           onCloseSession={handleCloseSession}
+          onRefundSession={handleRefundSession}
+          onClaimRefund={handleClaimRefund}
           creatorAddress={creatorAddress}
           onCreatorAddressChange={(value) => { setCreatorAddress(value); protocolManager.setCreatorAddress(value); }}
           onSignCreatorOffer={handleSignCreatorOffer}

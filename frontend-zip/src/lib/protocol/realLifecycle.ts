@@ -33,6 +33,7 @@ const settlementAbi = [
   { type: 'function', name: 'closeCooperative', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }, { name: 'voucher', type: 'tuple', components: [{ name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' }] }, { name: 'voucherSig', type: 'bytes' }, { name: 'ack', type: 'tuple', components: [{ name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' }, { name: 'voucherDigest', type: 'bytes32' }] }, { name: 'ackSig', type: 'bytes' }], outputs: [] },
   { type: 'function', name: 'claim', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }], outputs: [] },
   { type: 'function', name: 'claimable', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }, { name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'requestClose', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [] },
 ] as const;
 const tokenAbi = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] },
@@ -121,4 +122,11 @@ export async function claimRefund(p: { walletClient: any; rpc: string; settlemen
 
 export async function readVoucherDigest(rpc: string, settlement: Address, sessionId: Hex, cumulativeUnits: bigint): Promise<Hex> {
   return await publicClient(rpc).readContract({ address: settlement, abi: settlementAbi, functionName: 'hashVoucher', args: [{ sessionId, cumulativeUnits }] }) as Hex;
+}
+
+export async function requestClose(p: { walletClient: any; rpc: string; settlement: Address; account: Address; sessionId: Hex }): Promise<Hex> {
+  const txHash = await p.walletClient.writeContract({ address: p.settlement, abi: settlementAbi, functionName: 'requestClose', args: [p.sessionId], account: p.account });
+  const receipt = await publicClient(p.rpc).waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') throw new Error(`Request close failed: ${txHash}`);
+  return txHash;
 }

@@ -13,7 +13,19 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { StreamManifest, SegmentManifest, computeSegmentLeaf, verifyMerkleProof, verifySegmentIntegrity } from './manifest';
 import { accessService } from './accessClient';
 import { EIP712_TYPES, getStreamPayDomain } from './typedData';
-import { buildContentOffer, signOffer, openSession as openRealSession, signVoucher as signRealVoucher, checkpoint as checkpointReal, signCloseAck, closeSession as closeRealSession, readVoucherDigest, readClaimable, claimRefund } from './realLifecycle';
+import {
+  buildContentOffer,
+  signOffer,
+  openSession as openRealSession,
+  signVoucher as signRealVoucher,
+  checkpoint as checkpointReal,
+  signCloseAck,
+  closeSession as closeRealSession,
+  readVoucherDigest,
+  readClaimable,
+  claimRefund,
+  requestClose as requestRealClose,
+} from './realLifecycle';
 
 export type NetworkType = 'local' | 'testnet';
 export interface WalletState { address: Address | ''; chainId: number; network: NetworkType; isConnected: boolean; balanceUSDC: string; }
@@ -22,7 +34,7 @@ export interface SessionEvent { id: string; type: string; timestamp: string; txH
 export interface StreamSessionState {
   sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed'; cumulativeUnits: number; settledUnits: number;
   initialDepositUSDC: string; unredeemedUSDC: string; sessionSigner: Address | ''; payer: Address | ''; recipient: Address | ''; contractAddress: Address | ''; paymentToken: Address | '';
-  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
+  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'credited' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
 }
 
 export const MONAD_TESTNET_CHAIN_ID = 10143;
@@ -634,13 +646,21 @@ export class ProtocolLifecycleManager {
       const billed = Number(this.session.unredeemedUSDC) || 0;
       const refund = Math.max(0, deposit - billed).toFixed(6);
       this.session.refundUSDC = refund;
-      this.session.refundStatus = Number(refund) > 0 ? 'allocated' : 'not-finalized';
-      this.session.claimableUSDC = refund;
+      if (Number(refund) > 0) {
+        const currentBal = Number(this.wallet.balanceUSDC) || 0;
+        this.wallet.balanceUSDC = (currentBal + Number(refund)).toFixed(6);
+        this.session.refundStatus = 'credited';
+        this.session.claimableUSDC = '0';
+        this.addEvent('Session closed / refund credited', undefined, `${refund} USDC refunded directly to wallet balance`);
+      } else {
+        this.session.refundStatus = 'not-finalized';
+        this.session.claimableUSDC = '0';
+        this.addEvent('Session closed', undefined, 'Session closed with full usage');
+      }
       this.session.status = 'closed';
       this.session.settledUnits = this.session.cumulativeUnits;
       this.session.lastCloseAckSignature = null;
       this.session.lastTxHash = null;
-      this.addEvent('Session closed / refund allocated', undefined, `${refund} USDC allocated for refund`);
       this.notify();
       return null;
     }
@@ -683,11 +703,17 @@ export class ProtocolLifecycleManager {
     if (Number(claimableAmount) > 0) {
       this.session.refundStatus = 'claimable';
       this.session.claimableUSDC = claimableAmount;
-    } else {
-      this.session.refundStatus = 'allocated';
+      this.addEvent('Session closed on-chain / claimable', tx, `${claimableAmount} USDC claimable from contract`);
+    } else if (Number(refund) > 0) {
+      // Monad settlement contract _safePayout transferred the refund directly to s.payer wallet
+      this.session.refundStatus = 'credited';
       this.session.claimableUSDC = '0';
+      this.addEvent('Session closed on-chain / refund credited', tx, `${refund} USDC refunded directly to wallet`);
+    } else {
+      this.session.refundStatus = 'not-finalized';
+      this.session.claimableUSDC = '0';
+      this.addEvent('Session closed on-chain', tx, 'Session closed with full usage');
     }
-    this.addEvent('Session closed on-chain', tx, `${refund} USDC refund on-chain`);
     this.notify();
     return tx;
   }
@@ -711,6 +737,9 @@ export class ProtocolLifecycleManager {
   async claimRefund(): Promise<Hex | null> {
     if (simulationMode || this.session.isSimulated) {
       const amount = this.session.claimableUSDC || this.session.refundUSDC || '0';
+      if (this.session.refundStatus === 'credited' || this.session.refundStatus === 'claimed') {
+        throw new Error(`Refund of ${this.session.refundUSDC} USDC was already deposited directly into your wallet.`);
+      }
       this.session.claimableUSDC = '0';
       this.session.refundStatus = 'claimed';
       const currentBal = Number(this.wallet.balanceUSDC) || 0;
@@ -720,6 +749,21 @@ export class ProtocolLifecycleManager {
       return null;
     }
     await this.ensureWalletClient(requireAddress(this.wallet.address, 'Payer wallet'));
+    const claimableOnChain = await readClaimable({
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      token: MONAD_PAYMENT_TOKEN,
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+    });
+    if (claimableOnChain === 0n) {
+      await this.refreshBalance(this.wallet.address);
+      this.session.claimableUSDC = '0';
+      if (Number(this.session.refundUSDC) > 0) {
+        this.session.refundStatus = 'credited';
+      }
+      this.notify();
+      throw new Error(`No pending escrow tokens in contract to claim. Your refund (${this.session.refundUSDC} USDC) was already credited directly to your wallet upon session close.`);
+    }
     const tx = await claimRefund({
       walletClient: this.walletClient!,
       rpc: rpcFor(this.network),
@@ -732,6 +776,69 @@ export class ProtocolLifecycleManager {
     this.session.lastTxHash = tx;
     await this.refreshBalance(this.wallet.address);
     this.addEvent('Claimable refund claimed', tx);
+    this.notify();
+    return tx;
+  }
+
+  async refundSession(): Promise<{ tx: Hex | null; refundAmount: string; message: string }> {
+    if (!this.session.sessionId) throw new Error('No session active or available to refund.');
+
+    // Case 1: Session is active or checkpointing: close and refund unspent escrow
+    if (this.session.status === 'active' || this.session.status === 'checkpointing') {
+      const deposit = Number(this.session.initialDepositUSDC) || 0;
+      const billed = Number(this.session.unredeemedUSDC) || 0;
+      const refund = Math.max(0, deposit - billed).toFixed(6);
+
+      const tx = await this.closeSession();
+      return {
+        tx,
+        refundAmount: refund,
+        message: Number(refund) > 0
+          ? `${refund} USDC refunded back to your wallet upon settlement.`
+          : 'Session closed (all escrow consumed by streaming).',
+      };
+    }
+
+    // Case 2: Session is closed and has claimable escrow in contract
+    if (Number(this.session.claimableUSDC) > 0) {
+      const claimAmount = this.session.claimableUSDC;
+      const tx = await this.claimRefund();
+      return {
+        tx,
+        refundAmount: claimAmount,
+        message: `${claimAmount} USDC claimed from contract escrow into your wallet.`,
+      };
+    }
+
+    // Case 3: Session is closed and was already refunded/credited
+    if (this.session.refundStatus === 'credited' || this.session.refundStatus === 'claimed') {
+      return {
+        tx: this.session.lastTxHash,
+        refundAmount: this.session.refundUSDC,
+        message: `Refund of ${this.session.refundUSDC} USDC is already deposited in your wallet balance.`,
+      };
+    }
+
+    throw new Error('No refundable escrow available for this session.');
+  }
+
+  async requestUnilateralClose(): Promise<Hex | null> {
+    if (!this.session.sessionId) throw new Error('No active session.');
+    if (simulationMode || this.session.isSimulated) {
+      return await this.closeSession();
+    }
+    await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
+    this.session.status = 'closing';
+    this.notify();
+    const tx = await requestRealClose({
+      walletClient: this.walletClient!,
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+      sessionId: this.session.sessionId,
+    });
+    this.session.lastTxHash = tx;
+    this.addEvent('Unilateral close requested', tx, 'Challenge period started on-chain');
     this.notify();
     return tx;
   }

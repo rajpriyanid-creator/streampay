@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2 } from 'lucide-react';
+import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2, Banknote } from 'lucide-react';
 import { StreamSessionState, WalletState } from '../lib/protocol/sessionManager';
 import { fetchLiveEnvioTelemetry, EnvioTelemetry } from '../lib/envioClient';
 
@@ -14,6 +14,7 @@ interface PaymentsViewProps {
   onCheckpoint: () => void;
   onCloseSession: () => void;
   onClaimRefund: () => void;
+  onRefundSession?: () => void;
   onRefreshClaimable: () => void;
   onOpenSession?: () => void;
   onSignCreatorClose?: () => void;
@@ -26,6 +27,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   onCheckpoint,
   onCloseSession,
   onClaimRefund,
+  onRefundSession,
   onRefreshClaimable,
   onOpenSession,
   onSignCreatorClose,
@@ -55,7 +57,6 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   const depositNum = Number(session.initialDepositUSDC) || 0;
   const billedNum = Number(session.unredeemedUSDC) || 0;
   const computedRefund = Math.max(0, depositNum - billedNum).toFixed(6);
-  const hasRefundClaimable = Number(session.claimableUSDC) > 0 || (session.status === 'closed' && session.refundStatus === 'allocated' && Number(session.refundUSDC) > 0);
 
   return (
     <div className="p-6 space-y-6">
@@ -81,13 +82,26 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
             </button>
           )}
 
-          {session.status === 'closed' && onOpenSession && (
-            <button
-              onClick={onOpenSession}
-              className="px-4 py-2 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold cursor-pointer transition-colors"
-            >
-              New Payment Session
-            </button>
+          {session.status === 'closed' && (
+            <>
+              {Number(session.claimableUSDC) > 0 && (
+                <button
+                  onClick={onClaimRefund}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                >
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Claim Refund ({session.claimableUSDC} USDC)</span>
+                </button>
+              )}
+              {onOpenSession && (
+                <button
+                  onClick={onOpenSession}
+                  className="px-4 py-2 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  New Payment Session
+                </button>
+              )}
+            </>
           )}
 
           {session.status === 'active' && (
@@ -116,6 +130,16 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                   <span>Sign Creator Close Ack</span>
                 </button>
               )}
+
+              {/* Prominent Dedicated Refund Escrow Button */}
+              <button
+                onClick={onRefundSession || onCloseSession}
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.3)] transition-all"
+                title="Refund remaining unspent escrow deposit and close session"
+              >
+                <Banknote className="w-3.5 h-3.5" />
+                <span>Refund Escrow ({computedRefund} USDC)</span>
+              </button>
 
               <button
                 onClick={onCloseSession}
@@ -170,7 +194,9 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           <div className="text-base sm:text-lg font-bold text-emerald-300 font-mono mt-1 truncate">
             {session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC
           </div>
-          <div className="text-[10px] text-neutral-500 mt-1 truncate">{session.refundStatus}</div>
+          <div className="text-[10px] text-neutral-400 mt-1 truncate font-medium">
+            {session.refundStatus === 'credited' ? 'Credited to wallet' : session.refundStatus === 'claimed' ? 'Claimed' : session.refundStatus === 'claimable' ? 'Claimable' : session.status === 'active' ? 'Available to refund' : session.refundStatus}
+          </div>
         </div>
       </div>
 
@@ -194,7 +220,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
           <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
             <div className="text-[10px] text-neutral-500 uppercase font-semibold">Initial Escrow Deposit</div>
             <div className="font-mono text-white text-sm font-bold mt-0.5">{session.initialDepositUSDC || '0.0000'} USDC</div>
@@ -204,29 +230,102 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
             <div className="font-mono text-[#e8b56f] text-sm font-bold mt-0.5">{session.unredeemedUSDC} USDC</div>
           </div>
           <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
-            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Allocated Refund Balance</div>
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Refund Allocation</div>
             <div className="font-mono text-emerald-300 text-sm font-bold mt-0.5">
               {session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC
             </div>
           </div>
+          <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Refund Status</div>
+            <div className="text-sm font-bold mt-0.5 font-mono capitalize text-neutral-200">
+              {session.refundStatus === 'credited' ? (
+                <span className="text-emerald-400">Credited to Wallet</span>
+              ) : session.refundStatus === 'claimed' ? (
+                <span className="text-emerald-400">Claimed</span>
+              ) : session.refundStatus === 'claimable' ? (
+                <span className="text-amber-400">Claimable Now</span>
+              ) : session.status === 'active' ? (
+                <span className="text-emerald-300">Ready to Refund</span>
+              ) : (
+                session.refundStatus
+              )}
+            </div>
+          </div>
         </div>
 
-        {hasRefundClaimable && (
-          <div className="mt-3 p-3.5 rounded-xl border border-emerald-900/70 bg-emerald-950/30 flex items-center justify-between gap-4">
+        {/* Case 1: Session is Active -> Offer direct Refund of unspent escrow */}
+        {session.status === 'active' && (
+          <div className="mt-3 p-4 rounded-xl border border-emerald-900/60 bg-[#0c1611] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-xs font-bold text-emerald-200">
-                Refund Ready to Claim
+              <div className="flex items-center gap-2">
+                <Banknote className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-bold text-emerald-200">
+                  Unspent Escrow Refund Option Available
+                </span>
               </div>
-              <div className="text-[11px] text-emerald-300/80 mt-0.5">
-                {Number(session.claimableUSDC) > 0 ? session.claimableUSDC : (session.refundUSDC !== '0' ? session.refundUSDC : computedRefund)} USDC available for withdrawal from escrow.
+              <p className="text-[11px] text-neutral-300 mt-1 max-w-xl">
+                You currently have <span className="font-mono text-emerald-300 font-bold">{computedRefund} USDC</span> in unspent escrow. You can refund this balance back to your wallet at any time by closing the session.
+              </p>
+            </div>
+            <button
+              onClick={onRefundSession || onCloseSession}
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer transition-all whitespace-nowrap"
+            >
+              <Banknote className="w-4 h-4" />
+              <span>Refund Remaining Escrow ({computedRefund} USDC)</span>
+            </button>
+          </div>
+        )}
+
+        {/* Case 2: Session is Closed and has claimable tokens */}
+        {Number(session.claimableUSDC) > 0 && (
+          <div className="mt-3 p-4 rounded-xl border border-amber-900/70 bg-amber-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Banknote className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-amber-200">
+                  Claimable Escrow Refund Ready
+                </span>
+              </div>
+              <div className="text-[11px] text-amber-300/80 mt-1">
+                <span className="font-mono text-white font-bold">{session.claimableUSDC} USDC</span> is available in the settlement contract claimable balance. Click to withdraw directly to your wallet.
               </div>
             </div>
             <button
               onClick={onClaimRefund}
-              className="px-4 py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold shadow-md cursor-pointer transition-colors whitespace-nowrap"
+              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold shadow-md cursor-pointer transition-colors whitespace-nowrap"
             >
-              Claim Refund
+              Claim Escrow Refund ({session.claimableUSDC} USDC)
             </button>
+          </div>
+        )}
+
+        {/* Case 3: Session is Closed and refund was successfully credited or claimed */}
+        {session.status === 'closed' && (session.refundStatus === 'credited' || session.refundStatus === 'claimed') && Number(session.refundUSDC) > 0 && (
+          <div className="mt-3 p-4 rounded-xl border border-emerald-900/60 bg-emerald-950/20 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-emerald-200">
+                  Escrow Refund Successfully Completed
+                </div>
+                <div className="text-[11px] text-neutral-300 mt-0.5">
+                  Full refund of <span className="font-mono text-emerald-300 font-bold">{session.refundUSDC} USDC</span> was deposited directly into your wallet.
+                </div>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-800/50 text-[11px] font-mono text-emerald-300 font-semibold whitespace-nowrap">
+              {session.refundStatus === 'credited' ? 'Credited to Wallet' : 'Claimed'}
+            </span>
+          </div>
+        )}
+
+        {/* Case 4: Session Closed with zero refund */}
+        {session.status === 'closed' && Number(session.refundUSDC) === 0 && Number(session.claimableUSDC) === 0 && (
+          <div className="mt-3 p-3 rounded-xl bg-[#0b0907] border border-[#1e1710] text-[11px] text-neutral-400">
+            Session settled in full (100% of escrow consumed by streaming). No remaining refund balance.
           </div>
         )}
       </div>

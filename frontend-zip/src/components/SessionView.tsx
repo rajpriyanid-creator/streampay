@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { KeyRound, Shield, RefreshCw, Lock, ExternalLink, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { KeyRound, Shield, RefreshCw, Lock, ExternalLink, CheckCircle2, Clock, AlertCircle, Banknote } from 'lucide-react';
 import { StreamSessionState, WalletState } from '../lib/protocol/sessionManager';
 
 interface SessionViewProps {
@@ -14,6 +14,7 @@ interface SessionViewProps {
   onCheckpoint: () => void;
   onCloseSession: () => void;
   onClaimRefund: () => void;
+  onRefundSession?: () => void;
   onRefreshClaimable: () => void;
   onSignCreatorClose?: () => void;
   creatorCloseSigned?: boolean;
@@ -26,11 +27,15 @@ export const SessionView: React.FC<SessionViewProps> = ({
   onCheckpoint,
   onCloseSession,
   onClaimRefund,
+  onRefundSession,
   onRefreshClaimable,
   onSignCreatorClose,
   creatorCloseSigned,
 }) => {
   const pendingUnits = Math.max(0, session.cumulativeUnits - session.settledUnits);
+  const depositNum = Number(session.initialDepositUSDC) || 0;
+  const billedNum = Number(session.unredeemedUSDC) || 0;
+  const computedRefund = Math.max(0, depositNum - billedNum).toFixed(6);
 
   return (
     <div className="p-6 space-y-6">
@@ -83,6 +88,16 @@ export const SessionView: React.FC<SessionViewProps> = ({
                 </button>
               )}
 
+              {/* Prominent Dedicated Refund Escrow Button */}
+              <button
+                onClick={onRefundSession || onCloseSession}
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold flex items-center gap-2 cursor-pointer shadow-[0_0_12px_rgba(16,185,129,0.3)] transition-all"
+                title="Refund remaining unspent escrow deposit and close session"
+              >
+                <Banknote className="w-3.5 h-3.5" />
+                <span>Refund Escrow ({computedRefund} USDC)</span>
+              </button>
+
               <button
                 onClick={onCloseSession}
                 className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
@@ -94,12 +109,23 @@ export const SessionView: React.FC<SessionViewProps> = ({
           )}
 
           {session.status === 'closed' && (
-            <button
-              onClick={onOpenSession}
-              className="px-4 py-2 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
-            >
-              <span>New Session</span>
-            </button>
+            <>
+              {Number(session.claimableUSDC) > 0 && (
+                <button
+                  onClick={onClaimRefund}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+                >
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Claim Refund ({session.claimableUSDC} USDC)</span>
+                </button>
+              )}
+              <button
+                onClick={onOpenSession}
+                className="px-4 py-2 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <span>New Session</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -150,27 +176,69 @@ export const SessionView: React.FC<SessionViewProps> = ({
           <div className="text-lg font-bold text-white font-mono mt-1 truncate">
             {session.unredeemedUSDC} <span className="text-xs text-[#d89a4e]">USDC</span>
           </div>
-          <div className="text-[11px] text-emerald-400 mt-1 truncate">
-            Refund: {session.refundUSDC} USDC ({session.refundStatus})
+          <div className="text-[11px] text-emerald-400 mt-1 truncate font-medium">
+            Refund: {session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC ({session.refundStatus === 'credited' ? 'Credited to wallet' : session.refundStatus === 'claimed' ? 'Claimed' : session.refundStatus === 'claimable' ? 'Claimable' : session.status === 'active' ? 'Available' : session.refundStatus})
           </div>
         </div>
       </div>
 
+      {/* Escrow Refund Status & Actions Panel */}
+      {session.status === 'active' && (
+        <div className="p-4 rounded-2xl border border-emerald-900/60 bg-[#0c1611] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Banknote className="w-4 h-4 text-emerald-400" />
+              <span className="text-sm font-semibold text-emerald-200">Unspent Escrow Refund Available</span>
+            </div>
+            <div className="text-xs text-neutral-300 mt-1">
+              You have <span className="font-mono text-emerald-300 font-bold">{computedRefund} USDC</span> in unspent deposit. You can refund your remaining escrow back to your wallet at any time.
+            </div>
+          </div>
+          <button
+            onClick={onRefundSession || onCloseSession}
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-[0_0_12px_rgba(16,185,129,0.3)] cursor-pointer transition-all whitespace-nowrap"
+          >
+            <Banknote className="w-4 h-4" />
+            <span>Refund Escrow ({computedRefund} USDC)</span>
+          </button>
+        </div>
+      )}
+
       {/* Claimable Refund Alert (if available) */}
       {Number(session.claimableUSDC) > 0 && (
-        <div className="p-4 rounded-2xl border border-emerald-900/60 bg-emerald-950/20 flex items-center justify-between gap-4">
+        <div className="p-4 rounded-2xl border border-amber-900/60 bg-amber-950/20 flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-semibold text-emerald-200">Claimable Refund Available</div>
-            <div className="text-xs text-emerald-300/70 mt-0.5">
-              {session.claimableUSDC} USDC is ready to withdraw from the settlement smart contract.
+            <div className="text-sm font-semibold text-amber-200">Claimable Refund Available</div>
+            <div className="text-xs text-amber-300/70 mt-0.5">
+              {session.claimableUSDC} USDC is held in the settlement contract claimable balance. Click to withdraw.
             </div>
           </div>
           <button
             onClick={onClaimRefund}
-            className="px-4 py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold cursor-pointer transition-colors shadow-sm"
+            className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold cursor-pointer transition-colors shadow-sm whitespace-nowrap"
           >
             Claim Refund
           </button>
+        </div>
+      )}
+
+      {/* Completed Refund Confirmation */}
+      {session.status === 'closed' && (session.refundStatus === 'credited' || session.refundStatus === 'claimed') && Number(session.refundUSDC) > 0 && (
+        <div className="p-4 rounded-2xl border border-emerald-900/60 bg-emerald-950/20 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-emerald-200">Escrow Refund Returned</div>
+              <div className="text-xs text-neutral-300 mt-0.5">
+                Full refund of <span className="font-mono text-emerald-300 font-bold">{session.refundUSDC} USDC</span> was transferred directly into your wallet.
+              </div>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 rounded-lg bg-emerald-950/70 border border-emerald-800/50 text-[11px] font-mono text-emerald-300 font-semibold whitespace-nowrap">
+            {session.refundStatus === 'credited' ? 'Credited to Wallet' : 'Claimed'}
+          </span>
         </div>
       )}
 
