@@ -4,8 +4,10 @@ import path from 'path';
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
 import { config } from './config';
 
-export const UNITS_PER_SEGMENT = 5n;
-export const SEGMENT_DURATION_SEC = 5;
+export const UNITS_PER_SEGMENT = 2n;
+export const SEGMENT_DURATION_SEC = 2;
+export const REAL_DEMO_UNITS_PER_SEGMENT = 5n;
+export const REAL_DEMO_SEGMENT_DURATION_SEC = 5;
 export const UNIT_PRICE = 500n; // Existing canonical demo streams: 0.0005 USDC per unit.
 export const REAL_DEMO_UNIT_PRICE = 100n; // Real-video demo: 0.0001 USDC per unit.
 
@@ -136,7 +138,10 @@ const manifestStore = new Map<string, any>();
 
 export function createCanonicalManifest(streamId: string) {
   const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
-  const unitPrice = streamId === 'real-demo' ? REAL_DEMO_UNIT_PRICE : UNIT_PRICE;
+  const isRealDemo = streamId === 'real-demo';
+  const unitPrice = isRealDemo ? REAL_DEMO_UNIT_PRICE : UNIT_PRICE;
+  const unitsPerSegment = isRealDemo ? REAL_DEMO_UNITS_PER_SEGMENT : UNITS_PER_SEGMENT;
+  const segmentDurationSec = isRealDemo ? REAL_DEMO_SEGMENT_DURATION_SEC : SEGMENT_DURATION_SEC;
   const pricingPolicyHash = streamId === 'real-demo' ? REAL_DEMO_PRICING_POLICY_HASH : CANONICAL_PRICING_POLICY_HASH;
   const zeroHash = ('0x' + '00'.repeat(32)) as Hex;
 
@@ -167,14 +172,14 @@ export function createCanonicalManifest(streamId: string) {
   let cum = 0n;
 
   for (let i = 0; i < segmentCount; i++) {
-    cum += UNITS_PER_SEGMENT;
+    cum += unitsPerSegment;
     const segBytes = getSegmentBytes(streamId, i);
     const segmentSha256 = computeSegmentSha256(segBytes);
 
     rawSegments.push({
       segmentIndex: i,
-      durationUnits: SEGMENT_DURATION_SEC,
-      costUSDC: (UNITS_PER_SEGMENT * unitPrice).toString(),
+      durationUnits: segmentDurationSec,
+      costUSDC: (unitsPerSegment * unitPrice).toString(),
       cumulativeUnits: cum.toString(),
       contentIdHash,
       renditionIdHash: zeroHash,
@@ -206,7 +211,7 @@ export function createCanonicalManifest(streamId: string) {
     streamId,
     title: streamId === 'real-demo' ? 'Real Video Test — RuralFlowAI' : 'Monad StreamPay HD Demo Video',
     totalSegments: segments.length,
-    totalDurationSec: segments.length * SEGMENT_DURATION_SEC,
+    totalDurationSec: segments.length * segmentDurationSec,
     unitPriceUSDC: streamId === 'real-demo' ? '0.0001' : '0.0005',
     unitPrice: unitPrice.toString(),
     contentIdHash,
