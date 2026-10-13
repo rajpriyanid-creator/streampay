@@ -27,6 +27,9 @@ export interface StreamSessionState {
 export const MONAD_TESTNET_CHAIN_ID = 10143;
 export const LOCAL_CHAIN_ID = 31337;
 export const MONAD_PAYMENT_TOKEN = '0x534b2f3A21130d7a60830c2Df862319e593943A3' as Address;
+// The deployed settlement contract enforces this maximum unredeemed window.
+// Checkpoint before requesting a voucher that would cross it.
+const MAX_CREDIT_WINDOW_UNITS = 20n;
 const simulationMode = import.meta.env?.VITE_STREAM_SIMULATION === 'true';
 const sessionStorageKey = 'streampay.protocol.session.v1';
 const signerStorageKey = 'streampay.session-signer.v1';
@@ -273,6 +276,15 @@ export class ProtocolLifecycleManager {
     const segment: SegmentManifest | undefined = manifest.segments[segmentIndex]; if (!segment) throw new Error(`Segment ${segmentIndex} not found.`);
     this.session.activeSegmentIndex = segmentIndex; this.notify();
     const cumulativeUnits = BigInt(segment.cumulativeUnits);
+    const settledUnits = BigInt(this.session.settledUnits);
+    if (cumulativeUnits > settledUnits + MAX_CREDIT_WINDOW_UNITS) {
+      if (this.session.cumulativeUnits <= this.session.settledUnits || !this.session.lastVoucherSignature) {
+        throw new Error('Credit window is full. Checkpoint the current session before requesting another segment.');
+      }
+      // The previous voucher is the highest delivered voucher and can be
+      // checkpointed before signing/requesting the next segment.
+      await this.checkpointSession();
+    }
     const signature = simulationMode ? await this.signVoucher(this.session.sessionId, cumulativeUnits) : await signRealVoucher(this.signerAccount, requireAddress(this.session.contractAddress, 'Settlement contract'), this.session.sessionId, cumulativeUnits, MONAD_TESTNET_CHAIN_ID);
     this.session.lastVoucherSignature = signature;
     const access = await accessService.requestSegmentAccess({ sessionId: this.session.sessionId, sessionSigner: (this.session.sessionSigner || this.simulationAccount.address) as Address, recipient: (this.session.recipient || zeroAddress) as Address, contractAddress: this.session.contractAddress || zeroAddress, chainId: this.wallet.chainId, streamId: manifest.streamId, segmentIndex, voucher: { sessionId: this.session.sessionId, cumulativeUnits: cumulativeUnits.toString(), signature } });

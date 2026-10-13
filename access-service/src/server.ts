@@ -717,11 +717,12 @@ app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => 
 
   const manifest = getManifest(streamId);
 
-  let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
+  const targetDuration = Math.max(...manifest.segments.map((segment: { durationUnits: number }) => segment.durationUnits));
+  let playlist = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:0\n`;
 
   for (let i = 0; i < manifest.segments.length; i++) {
     const extension = getSegmentFilePath(streamId, i).toLowerCase().endsWith('.mp4') ? 'mp4' : 'ts';
-    playlist += `#EXTINF:2.0,\n/api/access/content/${streamId}/segment_${i}.${extension}\n`;
+    playlist += `#EXTINF:${manifest.segments[i].durationUnits}.0,\n/api/access/content/${streamId}/segment_${i}.${extension}\n`;
   }
   playlist += '#EXT-X-ENDLIST\n';
 
