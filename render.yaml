@@ -23,4 +23,4 @@ services:
       - key: CORS_ORIGIN
         sync: false
       - key: TOKEN_SECRET
-        sync: false
+        generateValue: true

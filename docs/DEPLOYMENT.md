@@ -11,11 +11,10 @@ The repository includes [`render.yaml`](../render.yaml). In Render, choose **New
 - Network: Monad Testnet, chain ID `10143`
 - Settlement: `0x3E016fa87f7149971F65Df413b667C5355c5B060`
 
-Set these secret/environment values in Render before deploying:
+Set this environment value in Render before deploying (the Blueprint automatically generates `TOKEN_SECRET` for new Blueprint-managed services):
 
 ```text
 CORS_ORIGIN=https://<frontend-host>
-TOKEN_SECRET=<random-long-secret>
 ```
 
 `CORS_ORIGIN` must be the exact frontend origin with no trailing slash. Do not set `SIMULATION_MODE=true` or `ENABLE_TEST_CLOCK=true` on Render. The free service filesystem is ephemeral; this is acceptable for a demo but is documented as a limitation. Use a persistent disk or external state store for production.
