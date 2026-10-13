@@ -48,7 +48,13 @@ function getOrCreateSignerKey(): Hex {
   return created;
 }
 
-const rpcFor = (network: NetworkType) => network === 'testnet' ? (import.meta.env?.VITE_MONAD_TESTNET_RPC || 'https://testnet-rpc.monad.xyz') : (import.meta.env?.VITE_LOCAL_RPC || 'http://127.0.0.1:8545');
+const rpcFor = (network: NetworkType) =>
+  network === 'testnet'
+    ? (import.meta.env?.VITE_ALCHEMY_RPC_URL ||
+       import.meta.env?.VITE_ENVIO_HYPER_RPC ||
+       import.meta.env?.VITE_MONAD_TESTNET_RPC ||
+       'https://testnet-rpc.monad.xyz')
+    : (import.meta.env?.VITE_LOCAL_RPC || 'http://127.0.0.1:8545');
 const monadTestnetChain = {
   id: MONAD_TESTNET_CHAIN_ID,
   name: 'Monad Testnet',

@@ -9,16 +9,14 @@
 #   3. Verify the contract code matches the expected ABI
 #
 name: streampay-indexer-testnet
-description: StreamPay v2.5 Envio HyperIndex event indexer for Monad Testnet (NOT YET DEPLOYED)
+description: StreamPay v2.5 Envio HyperIndex event indexer for Monad Testnet (Chain ID 10143)
 networks:
   - id: 10143
-    # Set start_block to the actual deployment block after deployment
-    start_block: 0
+    start_block: 70464119
     contracts:
       - name: StreamPaySettlement
-        # REPLACE with actual deployed contract address after deployment
         address:
-          - "0x0000000000000000000000000000000000000000"
+          - "0x3E016fa87f7149971F65Df413b667C5355c5B060"
         handler: src/EventHandlers.ts
         events:
           - event: StreamOpened(bytes32 indexed sessionId, address indexed payer, address indexed recipient, address sessionSigner, bytes32 offerDigest, uint256 initialDeposit, uint64 validUntil, uint64 redemptionGraceSeconds, uint64 redemptionDeadline)

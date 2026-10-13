@@ -44,7 +44,7 @@ const validSettlement = rawSettlement && isAddress(rawSettlement) ? (getAddress(
 export const config = {
   port: Number(process.env.PORT || 4001),
   PORT: Number(process.env.PORT || 4001),
-  rpcUrl: process.env.RPC_URL || 'http://127.0.0.1:8545',
+  rpcUrl: process.env.ALCHEMY_RPC_URL || process.env.ENVIO_HYPER_RPC || process.env.RPC_URL || 'http://127.0.0.1:8545',
   settlementAddress: validSettlement,
   SETTLEMENT_ADDRESS: validSettlement,
   corsOrigins: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),

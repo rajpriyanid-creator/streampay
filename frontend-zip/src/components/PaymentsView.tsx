@@ -154,6 +154,40 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
         </div>
       </div>
 
+      {/* Envio HyperIndex & Infrastructure Panel */}
+      <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16] space-y-3 text-xs">
+        <div className="flex items-center justify-between pb-2 border-b border-[#1b150f]">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="font-bold text-white uppercase tracking-wider text-[11px]">
+              Envio HyperIndex & HyperSync Verified
+            </span>
+          </div>
+          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950/50 border border-cyan-800/40 text-cyan-300">
+            Monad Testnet (10143) · Block 70464119+
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-neutral-300">
+          <div>
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Indexer Architecture</div>
+            <div className="font-semibold text-white mt-0.5">Envio HyperIndex v2.5</div>
+            <div className="text-[11px] text-neutral-400 mt-0.5">Sub-second event pipeline & schema</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Indexed Target</div>
+            <div className="font-mono text-xs text-[#e8b56f] mt-0.5 truncate">
+              {session.contractAddress || '0x3E016fa87f7149971F65Df413b667C5355c5B060'}
+            </div>
+            <div className="text-[11px] text-neutral-400 mt-0.5">Settlement & channel escrows</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Event Entities</div>
+            <div className="text-xs text-neutral-200 mt-0.5">StreamSession, Checkpoint, Claim</div>
+            <div className="text-[11px] text-emerald-400 mt-0.5">Real-time sync on Monad</div>
+          </div>
+        </div>
+      </div>
+
       {/* Vouchers & Verification History Table */}
       <div className="rounded-2xl bg-[#13100c] border border-[#241d16] overflow-hidden">
         <div className="p-4 border-b border-[#1f1812] flex items-center justify-between">

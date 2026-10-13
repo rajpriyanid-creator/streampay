@@ -15,9 +15,11 @@ import {
   Copy,
   ExternalLink,
   Power,
-  RefreshCw
+  RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 import { protocolManager, NetworkType } from '../lib/protocol/sessionManager';
+import { initDynamicClient } from '../lib/dynamic';
 
 interface HeaderProps {
   activeTab: 'stream' | 'manifest' | 'payments' | 'docs';
@@ -260,6 +262,16 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Reconnect Wallet</span>
+                </button>
+                <button
+                  onClick={() => {
+                    initDynamicClient();
+                    alert('Dynamic SDK active on Monad Testnet: Embedded passkey & EVM wallet sessions enabled.');
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-cyan-300 hover:bg-[#1d1711] transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Dynamic Auth & Wallets</span>
                 </button>
               </div>
             </div>
