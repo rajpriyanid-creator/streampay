@@ -5,7 +5,7 @@
 The repository includes [`render.yaml`](../render.yaml). In Render, choose **New → Blueprint**, connect `rajpriyanid-creator/streampay`, and select the `main` branch. Render will use:
 
 - Root directory: `access-service`
-- Build command: `npm install && npm run build`
+- Build command: `npm ci --include=dev && npm run build` (TypeScript needs the declared dev type packages during the build.)
 - Start command: `npm start`
 - Health check: `/health`
 - Network: Monad Testnet, chain ID `10143`
