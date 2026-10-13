@@ -18,6 +18,8 @@ import { ManifestView } from './components/ManifestView';
 import { PaymentsView } from './components/PaymentsView';
 import { DocsView } from './components/DocsView';
 import { SettingsView } from './components/SettingsView';
+import { SessionView } from './components/SessionView';
+import { Film } from 'lucide-react';
 
 import {
   protocolManager,
@@ -37,8 +39,11 @@ export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
 
   // App Navigation & UI State
-  const [activeTab, setActiveTab] = useState<'stream' | 'manifest' | 'payments' | 'docs'>('stream');
-  const [activeNav, setActiveNav] = useState('overview');
+  const [activeNav, setActiveNav] = useState<'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs'>('overview');
+  const computedActiveTab: 'stream' | 'manifest' | 'payments' | 'docs' =
+    activeNav === 'manifest' ? 'manifest' :
+    activeNav === 'payments' || activeNav === 'session' ? 'payments' :
+    activeNav === 'docs' ? 'docs' : 'stream';
   const [currentStreamId, setCurrentStreamId] = useState(() => {
     try { return window.localStorage.getItem('streampay.current-stream.v1') || 'monad-keynote-hd'; } catch { return 'monad-keynote-hd'; }
   });
@@ -226,23 +231,22 @@ export default function App() {
 
   // Switch navigation tabs smoothly
   const handleNavClick = (nav: string) => {
-    setActiveNav(nav);
-    if (nav === 'overview') setActiveTab('stream');
-    else if (nav === 'manifest') setActiveTab('manifest');
-    else if (nav === 'payments' || nav === 'session') setActiveTab('payments');
+    setActiveNav(nav as 'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs');
+  };
+
+  const handleHeaderTabClick = (tab: 'stream' | 'manifest' | 'payments' | 'docs') => {
+    if (tab === 'stream') setActiveNav('overview');
+    else if (tab === 'manifest') setActiveNav('manifest');
+    else if (tab === 'payments') setActiveNav('payments');
+    else if (tab === 'docs') setActiveNav('docs');
   };
 
   return (
     <div className="min-h-screen bg-[#0b0a08] text-neutral-200 flex flex-col overflow-x-hidden">
       {/* Header Bar */}
       <Header
-        activeTab={activeTab}
-        setActiveTab={(tab) => {
-          setActiveTab(tab);
-          if (tab === 'stream') setActiveNav('overview');
-          else if (tab === 'manifest') setActiveNav('manifest');
-          else if (tab === 'payments') setActiveNav('payments');
-        }}
+        activeTab={computedActiveTab}
+        setActiveTab={handleHeaderTabClick}
         network={network}
         walletAddress={wallet.address}
         walletBalance={wallet.balanceUSDC}
@@ -262,15 +266,15 @@ export default function App() {
 
         {/* Center Dynamic Content Area */}
         <main className="flex-1 min-w-0 px-4 sm:px-6 py-4 overflow-y-auto">
-          {!manifest && (
+          {!manifest && activeNav !== 'settings' && activeNav !== 'docs' && (
             <div className="p-8 rounded-2xl border border-red-900/50 bg-red-950/20 text-red-200">
               Waiting for the real Access Service manifest. Start the backend or check the configured URL in Settings.
             </div>
           )}
 
-          {manifest && activeTab === 'stream' && activeNav === 'overview' && (
+          {/* 1. Overview: Centerpiece Video Player + Metrics + Segments */}
+          {activeNav === 'overview' && manifest && (
             <div className="space-y-6">
-              {/* Centerpiece Cinematic Video Player */}
               <Player
                 manifest={manifest}
                 session={session}
@@ -280,14 +284,10 @@ export default function App() {
                 isPlaying={isPlaying}
                 setIsPlaying={setIsPlaying}
                 onOpenSessionRequested={() => setIsOpenSessionModal(true)}
-          verifiedMedia={verifiedMedia}
-          verifiedMediaType={verifiedMediaType}
+                verifiedMedia={verifiedMedia}
+                verifiedMediaType={verifiedMediaType}
               />
-
-              {/* 4 Metrics Cards Row */}
               <MetricsGrid manifest={manifest} />
-
-              {/* Video Segments Table */}
               <SegmentsList
                 manifest={manifest}
                 session={session}
@@ -299,11 +299,46 @@ export default function App() {
             </div>
           )}
 
-          {manifest && activeTab === 'manifest' && (
+          {/* 2. Segments Explorer: Dedicated Segments View */}
+          {activeNav === 'segments' && manifest && (
+            <div className="space-y-6">
+              <div className="p-5 rounded-2xl bg-[#13100c] border border-[#241d16] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Film className="w-5 h-5 text-[#d89a4e]" />
+                    <span>Video Segments Explorer: {manifest.title}</span>
+                  </h2>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    {manifest.totalSegments} segments · {manifest.totalDurationSec}s total duration · {manifest.unitPriceUSDC} USDC/segment · Merkle Root: {manifest.manifestRoot.slice(0, 14)}...
+                  </p>
+                </div>
+                {session.status !== 'active' && (
+                  <button
+                    onClick={() => setIsOpenSessionModal(true)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#d89a4e] to-[#b3752c] text-black text-xs font-bold shadow-lg hover:brightness-110 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    Open Payment Session
+                  </button>
+                )}
+              </div>
+              <SegmentsList
+                manifest={manifest}
+                session={session}
+                currentSegmentIndex={currentSegmentIndex}
+                onPlaySegment={handlePlaySegment}
+                onRefreshManifest={handleRefreshManifest}
+                onInspectProof={(seg) => setInspectedSegment(seg)}
+              />
+            </div>
+          )}
+
+          {/* 3. Manifest View */}
+          {activeNav === 'manifest' && manifest && (
             <ManifestView manifest={manifest} />
           )}
 
-          {activeTab === 'payments' && (
+          {/* 4. Payments Ledger */}
+          {activeNav === 'payments' && (
             <PaymentsView
               session={session}
               wallet={wallet}
@@ -314,10 +349,20 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'docs' && (
-            <DocsView />
+          {/* 5. Live Session View */}
+          {activeNav === 'session' && (
+            <SessionView
+              session={session}
+              wallet={wallet}
+              onOpenSession={() => setIsOpenSessionModal(true)}
+              onCheckpoint={handleCheckpointSession}
+              onCloseSession={handleCloseSession}
+              onClaimRefund={handleClaimRefund}
+              onRefreshClaimable={handleRefreshClaimable}
+            />
           )}
 
+          {/* 6. Settings View */}
           {activeNav === 'settings' && (
             <SettingsView
               network={network}
@@ -325,17 +370,9 @@ export default function App() {
             />
           )}
 
-          {manifest && activeNav === 'segments' && activeTab === 'stream' && (
-            <div className="space-y-6">
-              <SegmentsList
-                manifest={manifest}
-                session={session}
-                currentSegmentIndex={currentSegmentIndex}
-                onPlaySegment={handlePlaySegment}
-                onRefreshManifest={handleRefreshManifest}
-                onInspectProof={(seg) => setInspectedSegment(seg)}
-              />
-            </div>
+          {/* 7. Docs View */}
+          {activeNav === 'docs' && (
+            <DocsView />
           )}
         </main>
 
