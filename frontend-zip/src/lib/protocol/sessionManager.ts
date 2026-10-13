@@ -67,9 +67,10 @@ function injectedProvider(): EthereumProvider {
 }
 
 async function selectedAccount(provider: EthereumProvider, requested?: string[]): Promise<string> {
+  // accountsChanged is authoritative. Some wallet extensions briefly expose a
+  // stale selectedAddress while the account switch is propagating.
   const accounts = requested || await provider.request({ method: 'eth_accounts' }) as string[];
-  const selected = provider.selectedAddress || '';
-  return selected && accounts.some((account) => account.toLowerCase() === selected.toLowerCase()) ? selected : accounts?.[0] || '';
+  return accounts?.[0] || '';
 }
 
 function requireAddress(value: string, label: string): Address { if (!value || !/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${label} is not configured as a valid address`); return value as Address; }
@@ -88,13 +89,14 @@ export class ProtocolLifecycleManager {
   private creatorOffer: { offer: any; signature: Hex } | null = null;
   private creatorAddress: Address | '' = '';
   private payerAddress: Address | '' = '';
+  private walletDisconnectRequested = false;
   private signerAccount = simulationMode ? this.simulationAccount : privateKeyToAccount(getOrCreateSignerKey());
 
   constructor() {
     if (this.network === 'testnet') { this.wallet.network = 'testnet'; this.wallet.chainId = MONAD_TESTNET_CHAIN_ID; this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address; this.session.paymentToken = MONAD_PAYMENT_TOKEN; }
     this.restorePersistedState();
     if (simulationMode) { this.wallet.address = this.simulationAccount.address; this.wallet.isConnected = true; this.session.payer = this.simulationAccount.address; this.session.sessionSigner = this.simulationAccount.address; }
-    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', () => { void this.syncActiveAccount(); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
+    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', (accounts) => { void this.syncActiveAccount(Array.isArray(accounts) ? accounts as string[] : []); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
   }
   subscribe(cb: () => void): () => void { this.listeners.push(cb); return () => { this.listeners = this.listeners.filter((x) => x !== cb); }; }
   private persistState() {
@@ -135,13 +137,13 @@ export class ProtocolLifecycleManager {
   async getActiveAccount(): Promise<Address> { return this.refreshInjectedWallet(); }
   async reconnectWallet(): Promise<void> { await this.connectWallet(); }
 
-  private async syncActiveAccount(): Promise<void> {
+  private async syncActiveAccount(requestedAccounts?: string[]): Promise<void> {
     if (!window.ethereum) return;
+    if (this.walletDisconnectRequested) return;
     try {
       const provider = injectedProvider();
-      const accounts = await provider.request({ method: 'eth_accounts' }) as string[];
-      const selected = provider.selectedAddress || '';
-      if (selected && !accounts.some((account) => account.toLowerCase() === selected.toLowerCase())) {
+      const accounts = requestedAccounts ?? await provider.request({ method: 'eth_accounts' }) as string[];
+      if (!accounts.length) {
         this.wallet.isConnected = false;
         this.wallet.address = '';
         this.wallet.balanceUSDC = '0';
@@ -149,7 +151,7 @@ export class ProtocolLifecycleManager {
         this.notify();
         return;
       }
-      await this.refreshInjectedWallet(); this.wallet.isConnected = true; this.notify();
+      await this.refreshInjectedWallet(accounts[0] as Address, accounts); this.wallet.isConnected = true; this.notify();
     } catch { this.wallet.isConnected = false; this.wallet.address = ''; this.notify(); }
   }
 
@@ -162,6 +164,7 @@ export class ProtocolLifecycleManager {
   }
 
   async connectWallet(): Promise<void> {
+    this.walletDisconnectRequested = false;
     if (this.network === 'local' && simulationMode) { this.wallet.isConnected = true; this.notify(); return; }
     const provider = injectedProvider();
     const chainId = this.network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
@@ -205,9 +208,9 @@ export class ProtocolLifecycleManager {
     this.session.isSimulated = false; this.notify();
   }
 
-  private async refreshInjectedWallet(expected?: Address): Promise<Address> {
+  private async refreshInjectedWallet(expected?: Address, requestedAccounts?: string[]): Promise<Address> {
     const provider = injectedProvider();
-    const active = requireAddress(await selectedAccount(provider), 'Active wallet account');
+    const active = requireAddress(await selectedAccount(provider, requestedAccounts), 'Active wallet account');
     if (expected && active.toLowerCase() !== expected.toLowerCase()) {
       throw new Error(`Rabby account mismatch. Expected ${expected}, but the active account is ${active}. Switch Rabby accounts and reconnect.`);
     }
@@ -216,7 +219,7 @@ export class ProtocolLifecycleManager {
     return active;
   }
 
-  disconnectWallet(): void { this.wallet.isConnected = false; this.wallet.address = ''; this.walletClient = null; this.notify(); }
+  disconnectWallet(): void { this.walletDisconnectRequested = true; this.wallet.isConnected = false; this.wallet.address = ''; this.wallet.balanceUSDC = '0'; this.walletClient = null; this.notify(); }
 
   async signCreatorOffer(manifest: StreamManifest, creatorAddress: string): Promise<void> {
     if (!this.walletClient || !this.wallet.isConnected) throw new Error('Connect the Creator wallet before signing.');
