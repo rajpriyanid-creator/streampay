@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: streampay-access-service
+    runtime: node
+    plan: free
+    rootDir: access-service
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NETWORK
+        value: monad-testnet
+      - key: RPC_URL
+        value: https://testnet-rpc.monad.xyz
+      - key: SETTLEMENT_ADDRESS
+        value: 0x3E016fa87f7149971F65Df413b667C5355c5B060
+      - key: STREAM_IDS
+        value: monad-keynote-hd,demo-stream,real-demo
+      - key: DATA_STORE_DIR
+        value: /tmp/streampay-data
+      - key: CORS_ORIGIN
+        sync: false
+      - key: TOKEN_SECRET
+        sync: false
