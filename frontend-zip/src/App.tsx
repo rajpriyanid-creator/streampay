@@ -88,6 +88,12 @@ export default function App() {
 
   // Handle stream selection
   const handleSelectStream = useCallback(async (streamId: string) => {
+    const activeSession = protocolManager.getSession();
+    if (activeSession.status !== 'inactive' && activeSession.status !== 'closed') {
+      alert('Cannot switch streams while a payment session is active. Close the current session first, then select another stream.');
+      return;
+    }
+
     setCurrentStreamId(streamId);
     setIsPlaying(false);
     setCurrentSegmentIndex(0);
