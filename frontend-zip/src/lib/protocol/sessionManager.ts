@@ -155,6 +155,22 @@ export class ProtocolLifecycleManager {
   async getActiveAccount(): Promise<Address> { return this.refreshInjectedWallet(); }
   async reconnectWallet(): Promise<void> { await this.connectWallet(); }
 
+  private async refreshBalance(address: Address): Promise<void> {
+    if (this.network === 'testnet' && address) {
+      try {
+        const balance = await createPublicClient({ transport: http(rpcFor(this.network)) }).readContract({
+          address: MONAD_PAYMENT_TOKEN,
+          abi: [{ type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] }] as const,
+          functionName: 'balanceOf',
+          args: [address],
+        });
+        this.wallet.balanceUSDC = (Number(balance) / 1_000_000).toFixed(6);
+      } catch {
+        this.wallet.balanceUSDC = 'unavailable';
+      }
+    }
+  }
+
   private async syncActiveAccount(requestedAccounts?: string[]): Promise<void> {
     if (!window.ethereum) return;
     if (this.walletDisconnectRequested) return;
@@ -162,15 +178,37 @@ export class ProtocolLifecycleManager {
       const provider = injectedProvider();
       const accounts = requestedAccounts ?? await provider.request({ method: 'eth_accounts' }) as string[];
       if (!accounts.length) {
-        this.wallet.isConnected = false;
-        this.wallet.address = '';
-        this.wallet.balanceUSDC = '0';
-        this.walletClient = null;
-        this.notify();
+        if (this.wallet.isConnected || this.wallet.address) {
+          this.wallet.isConnected = false;
+          this.wallet.address = '';
+          this.wallet.balanceUSDC = '0';
+          this.walletClient = null;
+          this.notify();
+        }
         return;
       }
-      await this.refreshInjectedWallet(accounts[0] as Address, accounts); this.wallet.isConnected = true; this.notify();
-    } catch { this.wallet.isConnected = false; this.wallet.address = ''; this.notify(); }
+      const active = accounts[0] as Address;
+      let currentChainId = this.wallet.chainId;
+      try {
+        const chainHex = (await provider.request({ method: 'eth_chainId' })) as string;
+        if (chainHex) currentChainId = Number(chainHex);
+      } catch {}
+      const accountChanged = !this.wallet.isConnected || !this.wallet.address || this.wallet.address.toLowerCase() !== active.toLowerCase();
+      const chainChanged = this.wallet.chainId !== currentChainId;
+      if (accountChanged || chainChanged) {
+        this.wallet.chainId = currentChainId;
+        await this.refreshInjectedWallet(active, accounts);
+        await this.refreshBalance(active);
+        this.wallet.isConnected = true;
+        this.notify();
+      }
+    } catch {
+      if (this.wallet.isConnected || this.wallet.address) {
+        this.wallet.isConnected = false;
+        this.wallet.address = '';
+        this.notify();
+      }
+    }
   }
 
   setNetwork(network: NetworkType): void {
@@ -213,12 +251,7 @@ export class ProtocolLifecycleManager {
     if (parsedChain !== chainId) throw new Error(`Wrong chain. Expected ${chainId}, wallet is on ${parsedChain}.`);
     this.walletClient = createWalletClient({ account: address, chain: this.network === 'testnet' ? monadTestnetChain : undefined, transport: custom(provider as never) });
     this.wallet = { address, chainId, network: this.network, isConnected: true, balanceUSDC: 'unknown' };
-    if (this.network === 'testnet') {
-      try {
-        const balance = await createPublicClient({ transport: http(rpcFor(this.network)) }).readContract({ address: MONAD_PAYMENT_TOKEN, abi: [{ type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] }] as const, functionName: 'balanceOf', args: [address] });
-        this.wallet.balanceUSDC = (Number(balance) / 1_000_000).toFixed(6);
-      } catch { this.wallet.balanceUSDC = 'unavailable'; }
-    }
+    await this.refreshBalance(address);
     if (!this.creatorAddress || address.toLowerCase() !== this.creatorAddress.toLowerCase()) {
       this.payerAddress = address;
       this.session.payer = address;
@@ -331,6 +364,15 @@ export class ProtocolLifecycleManager {
   async closeSession(): Promise<Hex | null> {
     if (!this.session.sessionId) throw new Error('No active session');
     if (simulationMode) { this.session.status = 'closing'; this.notify(); this.session.status = 'closed'; this.session.settledUnits = this.session.cumulativeUnits; this.session.lastCloseAckSignature = null; this.session.lastTxHash = null; this.notify(); return null; }
+    if (!this.session.lastVoucherSignature && this.session.cumulativeUnits === 0) {
+      this.session.lastVoucherSignature = await signRealVoucher(
+        this.signerAccount,
+        requireAddress(this.session.contractAddress, 'Settlement contract'),
+        this.session.sessionId,
+        0n,
+        MONAD_TESTNET_CHAIN_ID
+      );
+    }
     if (!this.walletClient || !this.session.lastVoucherSignature || !this.session.lastCloseAckSignature) throw new Error('Creator close authorization is required. Switch to the Creator account and sign the current close authorization first.');
     await this.refreshInjectedWallet(requireAddress(this.session.payer, 'Payer wallet'));
     this.session.status = 'closing'; this.notify();
@@ -360,6 +402,19 @@ export class ProtocolLifecycleManager {
     if (!this.walletClient || !this.session.sessionId) throw new Error('An open session is required.');
     if (!this.creatorAddress) throw new Error('Creator address is not set.');
     await this.refreshInjectedWallet(this.creatorAddress);
+    if (!this.session.lastVoucherSignature && this.session.cumulativeUnits === 0) {
+      if (simulationMode) {
+        this.session.lastVoucherSignature = await this.signVoucher(this.session.sessionId, 0n);
+      } else {
+        this.session.lastVoucherSignature = await signRealVoucher(
+          this.signerAccount,
+          requireAddress(this.session.contractAddress, 'Settlement contract'),
+          this.session.sessionId,
+          0n,
+          MONAD_TESTNET_CHAIN_ID
+        );
+      }
+    }
     const digest = await readVoucherDigest(rpcFor(this.network), requireAddress(this.session.contractAddress, 'Settlement contract'), this.session.sessionId, BigInt(this.session.cumulativeUnits));
     const sig = await signCloseAck(this.walletClient, requireAddress(this.session.contractAddress, 'Settlement contract'), this.creatorAddress, this.session.sessionId, BigInt(this.session.cumulativeUnits), digest, MONAD_TESTNET_CHAIN_ID);
     this.session.lastCloseAckSignature = sig; this.notify();
