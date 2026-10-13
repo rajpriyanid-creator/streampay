@@ -38,7 +38,9 @@ export default function App() {
   // App Navigation & UI State
   const [activeTab, setActiveTab] = useState<'stream' | 'manifest' | 'payments' | 'docs'>('stream');
   const [activeNav, setActiveNav] = useState('overview');
-  const [currentStreamId, setCurrentStreamId] = useState('monad-keynote-hd');
+  const [currentStreamId, setCurrentStreamId] = useState(() => {
+    try { return window.sessionStorage.getItem('streampay.current-stream.v1') || 'monad-keynote-hd'; } catch { return 'monad-keynote-hd'; }
+  });
   const [manifest, setManifest] = useState<StreamManifest | null>(null);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -95,6 +97,7 @@ export default function App() {
     }
 
     setCurrentStreamId(streamId);
+    try { window.sessionStorage.setItem('streampay.current-stream.v1', streamId); } catch { /* optional */ }
     setIsPlaying(false);
     setCurrentSegmentIndex(0);
     try {

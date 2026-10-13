@@ -28,6 +28,22 @@ export const MONAD_TESTNET_CHAIN_ID = 10143;
 export const LOCAL_CHAIN_ID = 31337;
 export const MONAD_PAYMENT_TOKEN = '0x534b2f3A21130d7a60830c2Df862319e593943A3' as Address;
 const simulationMode = import.meta.env?.VITE_STREAM_SIMULATION === 'true';
+const sessionStorageKey = 'streampay.protocol.session.v1';
+const signerStorageKey = 'streampay.session-signer.v1';
+
+function browserSessionStorage(): Storage | null {
+  try { return typeof window === 'undefined' ? null : window.sessionStorage; } catch { return null; }
+}
+
+function getOrCreateSignerKey(): Hex {
+  const storage = browserSessionStorage();
+  const existing = storage?.getItem(signerStorageKey) || '';
+  if (/^0x[0-9a-fA-F]{64}$/.test(existing)) return existing as Hex;
+  const created = generatePrivateKey();
+  storage?.setItem(signerStorageKey, created);
+  return created;
+}
+
 const rpcFor = (network: NetworkType) => network === 'testnet' ? (import.meta.env?.VITE_MONAD_TESTNET_RPC || 'https://testnet-rpc.monad.xyz') : (import.meta.env?.VITE_LOCAL_RPC || 'http://127.0.0.1:8545');
 const monadTestnetChain = {
   id: MONAD_TESTNET_CHAIN_ID,
@@ -69,11 +85,36 @@ export class ProtocolLifecycleManager {
   private creatorOffer: { offer: any; signature: Hex } | null = null;
   private creatorAddress: Address | '' = '';
   private payerAddress: Address | '' = '';
-  private signerAccount = simulationMode ? this.simulationAccount : privateKeyToAccount(generatePrivateKey());
+  private signerAccount = simulationMode ? this.simulationAccount : privateKeyToAccount(getOrCreateSignerKey());
 
-  constructor() { if (this.network === 'testnet') { this.wallet.network = 'testnet'; this.wallet.chainId = MONAD_TESTNET_CHAIN_ID; this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address; this.session.paymentToken = MONAD_PAYMENT_TOKEN; } if (simulationMode) { this.wallet.address = this.simulationAccount.address; this.wallet.isConnected = true; this.session.payer = this.simulationAccount.address; this.session.sessionSigner = this.simulationAccount.address; } if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', () => { void this.syncActiveAccount(); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} } }
+  constructor() {
+    if (this.network === 'testnet') { this.wallet.network = 'testnet'; this.wallet.chainId = MONAD_TESTNET_CHAIN_ID; this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address; this.session.paymentToken = MONAD_PAYMENT_TOKEN; }
+    this.restorePersistedState();
+    if (simulationMode) { this.wallet.address = this.simulationAccount.address; this.wallet.isConnected = true; this.session.payer = this.simulationAccount.address; this.session.sessionSigner = this.simulationAccount.address; }
+    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', () => { void this.syncActiveAccount(); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
+  }
   subscribe(cb: () => void): () => void { this.listeners.push(cb); return () => { this.listeners = this.listeners.filter((x) => x !== cb); }; }
-  private notify() { this.listeners.forEach((x) => x()); }
+  private persistState() {
+    const storage = browserSessionStorage();
+    if (!storage) return;
+    try {
+      const verificationLogs = this.session.verificationLogs.map(({ mediaData: _mediaData, ...log }) => log);
+      storage.setItem(sessionStorageKey, JSON.stringify({ session: { ...this.session, verificationLogs }, creatorAddress: this.creatorAddress, creatorOffer: this.creatorOffer }));
+    } catch { /* Browser storage is optional; protocol state remains authoritative. */ }
+  }
+  private restorePersistedState() {
+    const raw = browserSessionStorage()?.getItem(sessionStorageKey);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { session?: Partial<StreamSessionState>; creatorAddress?: Address | ''; creatorOffer?: { offer: any; signature: Hex } | null };
+      if (saved.session?.status === 'active' || saved.session?.status === 'closed') {
+        this.session = { ...this.session, ...saved.session, verificationLogs: saved.session.verificationLogs || [] } as StreamSessionState;
+      }
+      this.creatorAddress = saved.creatorAddress || '';
+      this.creatorOffer = saved.creatorOffer || null;
+    } catch { browserSessionStorage()?.removeItem(sessionStorageKey); }
+  }
+  private notify() { this.persistState(); this.listeners.forEach((x) => x()); }
   getNetwork(): NetworkType { return this.network; }
   getWallet(): WalletState { return { ...this.wallet }; }
   getSession(): StreamSessionState { return { ...this.session, verificationLogs: [...this.session.verificationLogs] }; }
