@@ -45,6 +45,7 @@ export default function App() {
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [verifiedMedia, setVerifiedMedia] = useState<Uint8Array | null>(null);
+  const [verifiedMediaType, setVerifiedMediaType] = useState('video/mp2t');
   const [creatorAddress, setCreatorAddress] = useState('');
   const [creatorState, setCreatorState] = useState(protocolManager.getCreatorState());
 
@@ -121,6 +122,7 @@ export default function App() {
         setCurrentSegmentIndex(segmentIndex);
         const verification = await protocolManager.requestAndVerifySegment(manifest, segmentIndex);
         setVerifiedMedia(verification.mediaData || null);
+        setVerifiedMediaType(verification.mediaMimeType || 'video/mp2t');
         setIsPlaying(true);
       } catch (err: unknown) {
         console.error('Play segment error:', err);
@@ -239,7 +241,8 @@ export default function App() {
                 isPlaying={isPlaying}
                 setIsPlaying={setIsPlaying}
                 onOpenSessionRequested={() => setIsOpenSessionModal(true)}
-                verifiedMedia={verifiedMedia}
+          verifiedMedia={verifiedMedia}
+          verifiedMediaType={verifiedMediaType}
               />
 
               {/* 4 Metrics Cards Row */}

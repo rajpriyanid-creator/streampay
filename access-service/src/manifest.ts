@@ -99,21 +99,27 @@ export function computeSegmentSha256(bytes: Buffer): Hex {
 // Memory cache for segment buffers
 const segmentBytesStore = new Map<string, Buffer>();
 
-function loadSegmentBytesFromDisk(streamId: string, segmentIndex: number): Buffer {
+export function getSegmentFilePath(streamId: string, segmentIndex: number): string {
   const candidatePaths = [
+    path.join(__dirname, '../media', streamId, `segment_${segmentIndex}.mp4`),
     path.join(__dirname, '../media', streamId, `segment_${segmentIndex}.ts`),
+    path.join(__dirname, '../../fixtures/media', `segment_${segmentIndex}.mp4`),
     path.join(__dirname, '../../fixtures/media', `segment_${segmentIndex}.ts`),
+    path.join(process.cwd(), 'media', streamId, `segment_${segmentIndex}.mp4`),
     path.join(process.cwd(), 'media', streamId, `segment_${segmentIndex}.ts`),
+    path.join(process.cwd(), 'fixtures/media', `segment_${segmentIndex}.mp4`),
     path.join(process.cwd(), 'fixtures/media', `segment_${segmentIndex}.ts`),
   ];
 
   for (const p of candidatePaths) {
-    if (fs.existsSync(p)) {
-      return fs.readFileSync(p);
-    }
+    if (fs.existsSync(p)) return p;
   }
 
-  throw new Error(`Segment file segment_${segmentIndex}.ts not found on disk for stream ${streamId}`);
+  throw new Error(`Segment file segment_${segmentIndex}.mp4 or .ts not found on disk for stream ${streamId}`);
+}
+
+function loadSegmentBytesFromDisk(streamId: string, segmentIndex: number): Buffer {
+  return fs.readFileSync(getSegmentFilePath(streamId, segmentIndex));
 }
 
 export function getSegmentBytes(streamId: string, segmentIndex: number): Buffer {
@@ -148,7 +154,7 @@ export function createCanonicalManifest(streamId: string) {
 
   let segmentCount = 5;
   if (mediaDir) {
-    const files = fs.readdirSync(mediaDir).filter(f => /^segment_\d+\.ts$/i.test(f));
+    const files = fs.readdirSync(mediaDir).filter(f => /^segment_\d+\.(?:ts|mp4)$/i.test(f));
     if (files.length > 0) segmentCount = files.length;
   }
 

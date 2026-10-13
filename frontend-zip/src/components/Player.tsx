@@ -27,6 +27,7 @@ interface PlayerProps {
   setIsPlaying: (playing: boolean) => void;
   onOpenSessionRequested: () => void;
   verifiedMedia: Uint8Array | null;
+  verifiedMediaType: string;
 }
 
 export const Player: React.FC<PlayerProps> = ({
@@ -39,6 +40,7 @@ export const Player: React.FC<PlayerProps> = ({
   setIsPlaying,
   onOpenSessionRequested,
   verifiedMedia,
+  verifiedMediaType,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -53,7 +55,7 @@ export const Player: React.FC<PlayerProps> = ({
     if (!verifiedMedia) return;
     if (mediaUrlRef.current) URL.revokeObjectURL(mediaUrlRef.current);
     const mediaCopy = new Uint8Array(verifiedMedia);
-    const nextUrl = URL.createObjectURL(new Blob([mediaCopy.buffer as ArrayBuffer], { type: 'video/mp2t' }));
+    const nextUrl = URL.createObjectURL(new Blob([mediaCopy.buffer as ArrayBuffer], { type: verifiedMediaType }));
     mediaUrlRef.current = nextUrl;
     setMediaUrl(nextUrl);
     setMediaPlaybackError(false);
@@ -61,7 +63,7 @@ export const Player: React.FC<PlayerProps> = ({
       URL.revokeObjectURL(nextUrl);
       if (mediaUrlRef.current === nextUrl) mediaUrlRef.current = null;
     };
-  }, [verifiedMedia]);
+  }, [verifiedMedia, verifiedMediaType]);
 
   const totalDuration = manifest.totalDurationSec || 10;
   const segmentDuration = totalDuration / manifest.totalSegments;
@@ -372,7 +374,7 @@ export const Player: React.FC<PlayerProps> = ({
       )}
       {mediaPlaybackError && mediaUrl && (
         <div className="absolute inset-x-5 bottom-20 z-20 rounded-lg bg-black/75 px-3 py-2 text-xs text-amber-200">
-          Segment verified. This browser does not decode MPEG-TS blobs directly; HLS/MSE playback is required for continuous video.
+          Segment verified, but this browser could not decode the delivered media format.
         </div>
       )}
 

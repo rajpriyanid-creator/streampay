@@ -8,7 +8,8 @@ import {
   getManifest,
   getMerkleProof,
   getSegment,
-  getSegmentBytes,
+    getSegmentBytes,
+    getSegmentFilePath,
   getStreamIdList,
   UNIT_PRICE,
   UNITS_PER_SEGMENT,
@@ -577,7 +578,7 @@ app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Respons
       segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/segment_${idx}.ts?token=${encodeURIComponent(segmentToken)}`,
+      contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/${getSegmentFilePath(targetStream, idx).toLowerCase().endsWith('.mp4') ? `segment_${idx}.mp4` : `segment_${idx}.ts`}?token=${encodeURIComponent(segmentToken)}`,
     });
   } catch (err: any) {
     const requestId = (req as any).id || 'unknown';
@@ -604,7 +605,7 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
     return;
   }
 
-  const match = segmentFile.match(/^segment_(\d+)\.ts$/);
+  const match = segmentFile.match(/^segment_(\d+)\.(ts|mp4)$/);
   if (!match) {
     res.status(400).json({ code: 'INVALID_SEGMENT_FILE', error: `Invalid segment filename: ${segmentFile}` });
     return;
@@ -663,7 +664,7 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
     reservationLedger.onDeliveryFailed(sessKey, tokenSig);
   });
 
-  res.setHeader('Content-Type', 'video/mp2t');
+  res.setHeader('Content-Type', match[2] === 'mp4' ? 'video/mp4' : 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store, private');
   res.setHeader('Content-Length', segmentData.length.toString());
   res.send(segmentData);
@@ -719,7 +720,8 @@ app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => 
   let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
 
   for (let i = 0; i < manifest.segments.length; i++) {
-    playlist += `#EXTINF:2.0,\n/api/access/content/${streamId}/segment_${i}.ts\n`;
+    const extension = getSegmentFilePath(streamId, i).toLowerCase().endsWith('.mp4') ? 'mp4' : 'ts';
+    playlist += `#EXTINF:2.0,\n/api/access/content/${streamId}/segment_${i}.${extension}\n`;
   }
   playlist += '#EXT-X-ENDLIST\n';
 

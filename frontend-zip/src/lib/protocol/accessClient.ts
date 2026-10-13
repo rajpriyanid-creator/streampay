@@ -96,11 +96,12 @@ export class AccessServiceClient {
     return data as SegmentAccessResponse;
   }
 
-  async fetchGatedContent(streamId: string, segmentIndex: number, token: string): Promise<{ data: Uint8Array; byteLength: number }> {
-    const res = await fetch(`${this.baseUrl}/api/access/content/${encodeURIComponent(streamId)}/segment_${segmentIndex}.ts?token=${encodeURIComponent(token)}`);
+  async fetchGatedContent(streamId: string, segmentIndex: number, token: string, contentUrl?: string): Promise<{ data: Uint8Array; byteLength: number; mimeType: string }> {
+    const url = contentUrl ? `${this.baseUrl}${contentUrl}` : `${this.baseUrl}/api/access/content/${encodeURIComponent(streamId)}/segment_${segmentIndex}.ts?token=${encodeURIComponent(token)}`;
+    const res = await fetch(url);
     if (!res.ok) throw apiError(res.status, await res.json().catch(() => ({})));
     const data = new Uint8Array(await res.arrayBuffer());
-    return { data, byteLength: data.byteLength };
+    return { data, byteLength: data.byteLength, mimeType: res.headers.get('content-type') || 'video/mp2t' };
   }
 
   async checkpointSync(sessionId: `0x${string}`): Promise<CheckpointSyncResponse> {
