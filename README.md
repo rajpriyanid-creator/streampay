@@ -239,4 +239,4 @@ All smart contract logic, architectural designs, security constraints, and deplo
 ---
 
 ## ⚖️ License
-MIT License(LICENSE). Created for the Monad "Metropolis" Hackathon.
+MIT License. Created for the Monad "Metropolis" Hackathon.
