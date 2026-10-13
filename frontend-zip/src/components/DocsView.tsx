@@ -4,11 +4,11 @@
  */
 
 import React from 'react';
-import { FileText, Shield, Code, Cpu, Terminal } from 'lucide-react';
+import { FileText, Shield, Code, Cpu, Terminal, Trophy, ExternalLink } from 'lucide-react';
 
 export const DocsView: React.FC = () => {
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="p-4 sm:p-6 space-y-6 max-w-4xl">
       {/* Header */}
       <div className="pb-4 border-b border-[#1f1912]">
         <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
@@ -18,6 +18,72 @@ export const DocsView: React.FC = () => {
         <p className="text-xs text-neutral-400 mt-1">
           Pay-per-use video streaming with micro-payment channels, EIP-712 vouchers, and Merkle leaf verification.
         </p>
+      </div>
+
+      {/* Metropolis Hackathon Dossier Card */}
+      <div className="p-5 rounded-2xl bg-gradient-to-br from-[#1a130c] via-[#14100c] to-[#0c0906] border border-[#43321f] space-y-4 shadow-xl">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-[#281b10] border border-[#523d24] flex items-center justify-center text-[#e8b56f]">
+              <Trophy className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white tracking-tight">Monad Metropolis Hackathon Dossier</h3>
+              <p className="text-[11px] text-neutral-400">Track 02: Consumer Products & Payments · Official Submission</p>
+            </div>
+          </div>
+          <a
+            href="https://hackathon.monad.xyz"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#261c12] hover:bg-[#382718] border border-[#523d24] text-[#e8b56f] text-xs font-semibold transition-colors cursor-pointer"
+          >
+            <span>Portal</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+          <div className="p-3 rounded-xl bg-[#080705] border border-[#231a12]">
+            <div className="text-[10px] font-bold text-[#8a7f72] uppercase tracking-wider">Primary Track</div>
+            <div className="text-xs font-bold text-[#e8b56f] mt-1">02 Consumer Products</div>
+            <p className="text-[10.5px] text-neutral-400 mt-1 leading-snug">
+              Second-by-second streaming micro-metering with gasless playback and invisible crypto UX.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#080705] border border-[#231a12]">
+            <div className="text-[10px] font-bold text-[#8a7f72] uppercase tracking-wider">Dynamic Bounty</div>
+            <div className="text-xs font-bold text-white mt-1">Best Use of Dynamic ($5k)</div>
+            <p className="text-[10.5px] text-neutral-400 mt-1 leading-snug">
+              Embedded EVM wallet onboarding & social auth targeting Monad Testnet (Chain ID 10143).
+            </p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#080705] border border-[#231a12]">
+            <div className="text-[10px] font-bold text-[#8a7f72] uppercase tracking-wider">Envio Bounty</div>
+            <div className="text-xs font-bold text-white mt-1">Best Use of Envio ($1k)</div>
+            <p className="text-[10.5px] text-neutral-400 mt-1 leading-snug">
+              Production HyperIndex indexing 8 settlement events from block 70464119 with real-time UI telemetry.
+            </p>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-xl bg-[#0c0907] border border-[#281d13] text-xs text-neutral-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+            <span className="font-mono text-[11px] text-[#e8b56f]">Settlement: 0x3E016fa87f7149971F65Df413b667C5355c5B060</span>
+          </div>
+          <a
+            href="https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-[#d89a4e] hover:underline flex items-center gap-1"
+          >
+            <span>View on MonadScan</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
       </div>
 
       {/* 9-Step Lifecycle Flow */}

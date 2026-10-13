@@ -20,6 +20,7 @@
   - `Best Use of Dynamic` ($5,000 USD) — Native Dynamic React SDK embedded auth & EVM wallet sessions (`@dynamic-labs/sdk-react-core`, `@dynamic-labs/ethereum`) providing zero-friction email/social/wallet onboarding.
   - `Best Use of Envio` ($1,000 USD + $5,000 Cloud Hosting) — Production Envio HyperIndex configuration (`indexer/config.testnet.yaml`) and real-time frontend telemetry client (`frontend-zip/src/lib/envioClient.ts`) tracking live settlement events from block `70464119`.
   - `Best Community Team Project` ($5,000 USD) — Open-source community project advancing consumer micro-payments on Monad.
+- **Official Hackathon Dossier:** Detailed track fit, bounty alignment, and rubric self-assessment in [`docs/HACKATHON.md`](docs/HACKATHON.md).
 
 ---
 
@@ -226,6 +227,7 @@ All smart contract logic, architectural designs, security constraints, and deplo
 
 ## 📁 Repository Documentation Index
 
+- [`docs/HACKATHON.md`](docs/HACKATHON.md) — Comprehensive Metropolis Hackathon dossier, track alignment, and rubric self-assessment.
 - [`docs/SUBMISSION.md`](docs/SUBMISSION.md) — Copy-paste hackathon submission text and form answers.
 - [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) — 3-minute video presentation script with exact timestamps.
 - [`docs/TESTNET_EVIDENCE.md`](docs/TESTNET_EVIDENCE.md) — Real on-chain transaction hashes, block numbers, and negative security outputs.
