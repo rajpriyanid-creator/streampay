@@ -50,7 +50,7 @@ export const config = {
   corsOrigins: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
   adminToken: process.env.ADMIN_TOKEN || '',
-  streamIds: (process.env.STREAM_IDS || 'monad-keynote-hd,demo-stream').split(',').map((s) => s.trim()).filter(Boolean),
+  streamIds: (process.env.STREAM_IDS || 'monad-keynote-hd,demo-stream,real-demo').split(',').map((s) => s.trim()).filter(Boolean),
   minUnitPrice: BigInt(process.env.MIN_UNIT_PRICE || '10000'),
   tokenTtlSec: Number(process.env.TOKEN_TTL_SEC || 60),
   clockSkewSec: Number(process.env.CLOCK_SKEW_SEC || 5),

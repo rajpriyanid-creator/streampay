@@ -42,6 +42,7 @@ export default function App() {
   const [manifest, setManifest] = useState<StreamManifest | null>(null);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [verifiedMedia, setVerifiedMedia] = useState<Uint8Array | null>(null);
   const [creatorAddress, setCreatorAddress] = useState('');
   const [creatorState, setCreatorState] = useState(protocolManager.getCreatorState());
 
@@ -109,7 +110,8 @@ export default function App() {
 
       try {
         setCurrentSegmentIndex(segmentIndex);
-        await protocolManager.requestAndVerifySegment(manifest, segmentIndex);
+        const verification = await protocolManager.requestAndVerifySegment(manifest, segmentIndex);
+        setVerifiedMedia(verification.mediaData || null);
         setIsPlaying(true);
       } catch (err: unknown) {
         console.error('Play segment error:', err);
@@ -228,6 +230,7 @@ export default function App() {
                 isPlaying={isPlaying}
                 setIsPlaying={setIsPlaying}
                 onOpenSessionRequested={() => setIsOpenSessionModal(true)}
+                verifiedMedia={verifiedMedia}
               />
 
               {/* 4 Metrics Cards Row */}

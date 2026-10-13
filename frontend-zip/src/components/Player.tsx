@@ -26,6 +26,7 @@ interface PlayerProps {
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
   onOpenSessionRequested: () => void;
+  verifiedMedia: Uint8Array | null;
 }
 
 export const Player: React.FC<PlayerProps> = ({
@@ -37,12 +38,30 @@ export const Player: React.FC<PlayerProps> = ({
   isPlaying,
   setIsPlaying,
   onOpenSessionRequested,
+  verifiedMedia,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [verifyingNotice, setVerifyingNotice] = useState<string | null>(null);
+  const [mediaPlaybackError, setMediaPlaybackError] = useState(false);
+  const mediaUrlRef = useRef<string | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!verifiedMedia) return;
+    if (mediaUrlRef.current) URL.revokeObjectURL(mediaUrlRef.current);
+    const mediaCopy = new Uint8Array(verifiedMedia);
+    const nextUrl = URL.createObjectURL(new Blob([mediaCopy.buffer as ArrayBuffer], { type: 'video/mp2t' }));
+    mediaUrlRef.current = nextUrl;
+    setMediaUrl(nextUrl);
+    setMediaPlaybackError(false);
+    return () => {
+      URL.revokeObjectURL(nextUrl);
+      if (mediaUrlRef.current === nextUrl) mediaUrlRef.current = null;
+    };
+  }, [verifiedMedia]);
 
   const totalDuration = manifest.totalDurationSec || 10;
   const segmentDuration = totalDuration / manifest.totalSegments;
@@ -339,6 +358,23 @@ export const Player: React.FC<PlayerProps> = ({
         height={540}
         className="absolute inset-0 w-full h-full object-cover"
       />
+      {mediaUrl && (
+        <video
+          key={mediaUrl}
+          src={mediaUrl}
+          className="absolute inset-0 z-[1] w-full h-full object-cover"
+          controls={false}
+          autoPlay
+          muted={isMuted}
+          playsInline
+          onError={() => setMediaPlaybackError(true)}
+        />
+      )}
+      {mediaPlaybackError && mediaUrl && (
+        <div className="absolute inset-x-5 bottom-20 z-20 rounded-lg bg-black/75 px-3 py-2 text-xs text-amber-200">
+          Segment verified. This browser does not decode MPEG-TS blobs directly; HLS/MSE playback is required for continuous video.
+        </div>
+      )}
 
       {/* Top Header Overlay */}
       <div className="relative z-20 p-5 flex items-start justify-between bg-gradient-to-b from-black/85 via-black/35 to-transparent">

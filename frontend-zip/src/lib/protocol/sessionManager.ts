@@ -17,7 +17,7 @@ import { buildContentOffer, signOffer, openSession as openRealSession, signVouch
 
 export type NetworkType = 'local' | 'testnet';
 export interface WalletState { address: Address | ''; chainId: number; network: NetworkType; isConnected: boolean; balanceUSDC: string; }
-export interface VerificationLog { id: string; segmentIndex: number; timestamp: string; durationUnits: number; byteLength: number; segmentSha256: Hex; computedSha256: Hex; sha256Valid: boolean; leaf: Hex; merkleValid: boolean; proofLength: number; token: string; cumulativeUnits: string; }
+export interface VerificationLog { id: string; segmentIndex: number; timestamp: string; durationUnits: number; byteLength: number; segmentSha256: Hex; computedSha256: Hex; sha256Valid: boolean; leaf: Hex; merkleValid: boolean; proofLength: number; token: string; cumulativeUnits: string; mediaData?: Uint8Array; }
 export interface StreamSessionState {
   sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed'; cumulativeUnits: number; settledUnits: number;
   initialDepositUSDC: string; unredeemedUSDC: string; sessionSigner: Address | ''; payer: Address | ''; recipient: Address | ''; contractAddress: Address | ''; paymentToken: Address | '';
@@ -236,7 +236,7 @@ export class ProtocolLifecycleManager {
     const leaf = computeSegmentLeaf(segment); const merkleValid = verifyMerkleProof(leaf, segment.merkleProof, manifest.manifestRoot);
     if (!verification.sha256Valid || !merkleValid) throw new Error('Segment integrity verification failed.');
     this.session.cumulativeUnits = Number(cumulativeUnits); this.session.unredeemedUSDC = ((Number(cumulativeUnits) * Number(manifest.unitPrice)) / 1_000_000).toFixed(6);
-    const log: VerificationLog = { id: `verif-${Date.now()}-${segmentIndex}`, segmentIndex, timestamp: new Date().toISOString(), durationUnits: segment.durationUnits, byteLength, segmentSha256: segment.segmentSha256, computedSha256: verification.computedSha256, sha256Valid: verification.sha256Valid, leaf, merkleValid, proofLength: segment.merkleProof.length, token: access.segmentToken, cumulativeUnits: cumulativeUnits.toString() };
+    const log: VerificationLog = { id: `verif-${Date.now()}-${segmentIndex}`, segmentIndex, timestamp: new Date().toISOString(), durationUnits: segment.durationUnits, byteLength, segmentSha256: segment.segmentSha256, computedSha256: verification.computedSha256, sha256Valid: verification.sha256Valid, leaf, merkleValid, proofLength: segment.merkleProof.length, token: access.segmentToken, cumulativeUnits: cumulativeUnits.toString(), mediaData: data };
     this.session.verificationLogs.unshift(log); this.notify(); return log;
   }
 

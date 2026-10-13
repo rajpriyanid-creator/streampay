@@ -33,7 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-4 select-none min-h-[calc(100vh-64px)]">
       <div className="space-y-6">
         {/* STREAMS Section */}
-        <div>
+            <div>
           <div className="text-[10px] font-bold text-[#786b5c] uppercase tracking-widest px-1 mb-2.5">
             STREAMS
           </div>
@@ -92,6 +92,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="text-[11px] text-[#8a7f72] mt-0.5">
                   8 segments · 16s
                 </div>
+              </div>
+            </div>
+
+            {/* Stream 3: Real Video Test */}
+            <div
+              onClick={() => onSelectStream('real-demo')}
+              className={`p-2.5 rounded-2xl cursor-pointer transition-all flex items-center gap-3 ${
+                currentStreamId === 'real-demo'
+                  ? 'bg-[#18130e] border border-[#7e5527] shadow-[0_0_15px_rgba(217,155,77,0.12)]'
+                  : 'bg-[#120f0c] border border-[#211a13] hover:border-[#382b1d] hover:bg-[#16120e]'
+              }`}
+            >
+              <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 bg-[#102018] border border-[#244b35]">
+                <div className="absolute inset-0 bg-gradient-to-tr from-[#0b1d14] via-[#1f5b3b] to-[#80c879] opacity-90" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-5 h-5 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-[#b8efb2]">
+                    <Play className="w-2.5 h-2.5 fill-current ml-[1px]" />
+                  </div>
+                </div>
+              </div>
+              <div className="overflow-hidden">
+                <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">Real Video Test</div>
+                <div className="text-[11px] text-[#8a7f72] mt-0.5">3 segments · 8s · H.264/AAC</div>
               </div>
             </div>
           </div>
