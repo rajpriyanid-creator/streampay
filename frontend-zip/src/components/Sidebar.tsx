@@ -30,7 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectNav,
 }) => {
   return (
-    <aside className="w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-4 select-none min-h-[calc(100vh-64px)]">
+    <aside className="w-[240px] xl:w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-3.5 sm:p-4 select-none min-h-[calc(100vh-64px)]">
       <div className="space-y-6">
         {/* STREAMS Section */}
             <div>
@@ -57,11 +57,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               </div>
 
-              <div className="overflow-hidden">
+              <div className="overflow-hidden min-w-0 flex-1">
                 <div className="text-xs font-semibold text-white tracking-tight truncate">
                   Monad Keynote HD
                 </div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5">
+                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">
                   5 segments · 10s
                 </div>
               </div>
@@ -85,11 +85,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               </div>
 
-              <div className="overflow-hidden">
+              <div className="overflow-hidden min-w-0 flex-1">
                 <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">
                   Demo Stream
                 </div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5">
+                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">
                   8 segments · 16s
                 </div>
               </div>
@@ -112,9 +112,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </div>
               </div>
-              <div className="overflow-hidden">
+              <div className="overflow-hidden min-w-0 flex-1">
                 <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">Real Video Test</div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5">6 segments · 30s · H.264/AAC</div>
+                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">6 segments · 30s · H.264/AAC</div>
               </div>
             </div>
           </div>

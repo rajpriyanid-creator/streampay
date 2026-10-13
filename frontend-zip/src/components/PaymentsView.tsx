@@ -80,12 +80,12 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
-          <div className="text-xs font-medium text-neutral-400">Session Status</div>
-          <div className="text-lg font-bold text-white mt-1 capitalize flex items-center gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3.5">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
+          <div className="text-xs font-medium text-neutral-400 truncate">Session Status</div>
+          <div className="text-base sm:text-lg font-bold text-white mt-1 capitalize flex items-center gap-2 truncate">
             <span
-              className={`w-2 h-2 rounded-full ${
+              className={`w-2 h-2 rounded-full shrink-0 ${
                 session.status === 'active' ? 'bg-emerald-400' : 'bg-neutral-500'
               }`}
             />
@@ -93,31 +93,31 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
-          <div className="text-xs font-medium text-neutral-400">Cumulative Units Billed</div>
-          <div className="text-lg font-bold text-[#e8b56f] font-mono mt-1">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
+          <div className="text-xs font-medium text-neutral-400 truncate">Cumulative Units Billed</div>
+          <div className="text-base sm:text-lg font-bold text-[#e8b56f] font-mono mt-1 truncate">
             {session.cumulativeUnits} units
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
-          <div className="text-xs font-medium text-neutral-400">Total Billed USDC</div>
-          <div className="text-lg font-bold text-white font-mono mt-1">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
+          <div className="text-xs font-medium text-neutral-400 truncate">Total Billed USDC</div>
+          <div className="text-base sm:text-lg font-bold text-white font-mono mt-1 truncate">
             {session.unredeemedUSDC} USDC
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
-          <div className="text-xs font-medium text-neutral-400">Settled On-Chain Units</div>
-          <div className="text-lg font-bold text-neutral-200 font-mono mt-1">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
+          <div className="text-xs font-medium text-neutral-400 truncate">Settled On-Chain Units</div>
+          <div className="text-base sm:text-lg font-bold text-neutral-200 font-mono mt-1 truncate">
             {session.settledUnits} units
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
-          <div className="text-xs font-medium text-neutral-400">Refund Allocation</div>
-          <div className="text-lg font-bold text-emerald-300 font-mono mt-1">{session.refundUSDC} USDC</div>
-          <div className="text-[10px] text-neutral-500 mt-1">{session.refundStatus}</div>
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
+          <div className="text-xs font-medium text-neutral-400 truncate">Refund Allocation</div>
+          <div className="text-base sm:text-lg font-bold text-emerald-300 font-mono mt-1 truncate">{session.refundUSDC} USDC</div>
+          <div className="text-[10px] text-neutral-500 mt-1 truncate">{session.refundStatus}</div>
         </div>
       </div>
 

@@ -233,7 +233,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0a08] text-neutral-200 flex flex-col">
+    <div className="min-h-screen bg-[#0b0a08] text-neutral-200 flex flex-col overflow-x-hidden">
       {/* Header Bar */}
       <Header
         activeTab={activeTab}
@@ -250,7 +250,7 @@ export default function App() {
       />
 
       {/* Main 3-Column Layout */}
-      <div className="flex-1 flex max-w-[1640px] w-full mx-auto justify-between">
+      <div className="flex-1 flex max-w-[1640px] w-full mx-auto justify-between overflow-x-hidden">
         {/* Left Sidebar */}
         <Sidebar
           currentStreamId={currentStreamId}
@@ -261,7 +261,7 @@ export default function App() {
         />
 
         {/* Center Dynamic Content Area */}
-        <main className="flex-1 min-w-0 px-6 py-4 overflow-y-auto">
+        <main className="flex-1 min-w-0 px-4 sm:px-6 py-4 overflow-y-auto">
           {!manifest && (
             <div className="p-8 rounded-2xl border border-red-900/50 bg-red-950/20 text-red-200">
               Waiting for the real Access Service manifest. Start the backend or check the configured URL in Settings.

@@ -393,7 +393,7 @@ export const Player: React.FC<PlayerProps> = ({
             {manifest.title || 'Monad Keynote HD'}
           </h1>
           <p className="text-xs text-neutral-400 mt-0.5 font-medium">
-            {manifest.totalSegments} segments · {manifest.totalDurationSec}s seconds · {manifest.unitPriceUSDC} USDC/segment
+            {manifest.totalSegments} segments · {manifest.totalDurationSec}s · {manifest.unitPriceUSDC} USDC/segment
           </p>
         </div>
 

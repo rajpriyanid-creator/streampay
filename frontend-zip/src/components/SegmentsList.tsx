@@ -126,18 +126,21 @@ export const SegmentsList: React.FC<SegmentsListProps> = ({
           );
 
           const sizeKb = (seg.byteLength / 1024).toFixed(1);
+          const formattedCost = (Number(seg.costUSDC) >= 1 && !seg.costUSDC.includes('.'))
+            ? (Number(seg.costUSDC) / 1_000_000).toFixed(4)
+            : seg.costUSDC;
 
           return (
             <div
               key={idx}
-              className={`p-2.5 rounded-xl flex items-center justify-between transition-all ${
+              className={`p-2.5 rounded-xl flex items-center justify-between gap-3 transition-all ${
                 isCurrent
                   ? 'bg-[#18130e] border border-[#5d401f] shadow-[0_0_15px_rgba(217,155,77,0.08)]'
                   : 'bg-[#120f0b] border border-[#201811] hover:border-[#332619] hover:bg-[#15110d]'
               }`}
             >
               {/* Left Column: Thumbnail + Index + Details */}
-              <div className="flex items-center gap-3.5">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
                 {/* Visual Thumbnail */}
                 <SegmentThumbnailSvg index={idx} isVerified={isVerified} />
 
@@ -147,32 +150,32 @@ export const SegmentsList: React.FC<SegmentsListProps> = ({
                 </div>
 
                 {/* Title & Metadata */}
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
-                    <span>Segment {idx}</span>
+                    <span className="whitespace-nowrap">Segment {idx}</span>
                     {isVerified && (
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/40">
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-800/40 whitespace-nowrap">
                         Verified
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-neutral-400 mt-0.5">
-                    {seg.durationUnits} sec · {sizeKb} KB
+                  <div className="text-xs text-neutral-400 mt-0.5 whitespace-nowrap truncate">
+                    {seg.durationUnits}s · {sizeKb} KB
                   </div>
                 </div>
               </div>
 
               {/* Right Column: Price + Action Button */}
-              <div className="flex items-center gap-6">
-                <div className="text-xs font-medium text-neutral-300">
-                  {seg.costUSDC} USDC
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="text-xs font-medium text-[#e8b56f] font-mono whitespace-nowrap px-2.5 py-1 rounded-lg bg-[#18130e] border border-[#2a2016]">
+                  {formattedCost} USDC
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
                   {/* Proof inspect icon */}
                   <button
                     onClick={() => onInspectProof(seg)}
-                    className="p-2 rounded-lg text-neutral-400 hover:text-[#e8b56f] hover:bg-[#1c1610] transition-colors cursor-pointer"
+                    className="p-2 rounded-lg text-neutral-400 hover:text-[#e8b56f] hover:bg-[#1c1610] transition-colors cursor-pointer shrink-0"
                     title="Inspect Merkle Proof & SHA-256"
                   >
                     <Binary className="w-4 h-4" />
@@ -182,7 +185,7 @@ export const SegmentsList: React.FC<SegmentsListProps> = ({
                   <button
                     onClick={() => handlePlayClick(idx)}
                     disabled={isLoading}
-                    className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#221a12] hover:bg-[#2c2116] border border-[#433220] hover:border-[#63482b] text-neutral-200 hover:text-white text-xs font-semibold transition-all shadow-sm active:scale-98 disabled:opacity-50 cursor-pointer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#221a12] hover:bg-[#2c2116] border border-[#433220] hover:border-[#63482b] text-neutral-200 hover:text-white text-xs font-semibold transition-all shadow-sm active:scale-98 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
                   >
                     {isLoading ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-[#d89a4e]" />
