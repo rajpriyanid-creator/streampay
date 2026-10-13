@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { RotateCcw, Play, CheckCircle2, Loader2, Binary } from 'lucide-react';
+import { RotateCcw, Play, CheckCircle2, Loader2, Binary, FileCode2 } from 'lucide-react';
 import { StreamManifest, SegmentManifest } from '../lib/protocol/manifest';
 import { StreamSessionState } from '../lib/protocol/sessionManager';
 
@@ -15,6 +15,7 @@ interface SegmentsListProps {
   onPlaySegment: (index: number) => Promise<void>;
   onRefreshManifest: () => void;
   onInspectProof: (segment: SegmentManifest) => void;
+  onOpenManifest?: () => void;
 }
 
 // Procedural SVG miniatures depicting the planetary sunrise angles for segments
@@ -87,6 +88,7 @@ export const SegmentsList: React.FC<SegmentsListProps> = ({
   onPlaySegment,
   onRefreshManifest,
   onInspectProof,
+  onOpenManifest,
 }) => {
   const [loadingIndex, setLoadingIndex] = useState<number | null>(null);
 
@@ -107,13 +109,26 @@ export const SegmentsList: React.FC<SegmentsListProps> = ({
           Video Segments
         </h2>
 
-        <button
-          onClick={onRefreshManifest}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#14110c] hover:bg-[#1b1611] border border-[#261d15] text-xs font-medium text-neutral-300 transition-colors shadow-sm cursor-pointer"
-        >
-          <RotateCcw className="w-3.5 h-3.5 text-neutral-400" />
-          <span>Refresh Manifest</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {onOpenManifest && (
+            <button
+              onClick={onOpenManifest}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#14110c] hover:bg-[#1b1611] border border-[#261d15] hover:border-[#443321] text-xs font-medium text-neutral-300 hover:text-[#e8b56f] transition-colors shadow-sm cursor-pointer"
+              title="Inspect Full Stream Manifest JSON"
+            >
+              <FileCode2 className="w-3.5 h-3.5 text-[#d89a4e]" />
+              <span>Inspect Manifest</span>
+            </button>
+          )}
+
+          <button
+            onClick={onRefreshManifest}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#14110c] hover:bg-[#1b1611] border border-[#261d15] text-xs font-medium text-neutral-300 transition-colors shadow-sm cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-neutral-400" />
+            <span>Refresh Manifest</span>
+          </button>
+        </div>
       </div>
 
       {/* Segments Table/List */}

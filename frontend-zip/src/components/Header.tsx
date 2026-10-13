@@ -22,12 +22,13 @@ import { protocolManager, NetworkType } from '../lib/protocol/sessionManager';
 import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
 
 interface HeaderProps {
-  activeTab: 'stream' | 'manifest' | 'payments' | 'docs';
-  setActiveTab: (tab: 'stream' | 'manifest' | 'payments' | 'docs') => void;
+  activeTab: 'stream' | 'payments' | 'docs' | 'manifest';
+  setActiveTab: (tab: 'stream' | 'payments' | 'docs') => void;
   network: NetworkType;
   walletAddress: string;
   walletBalance: string;
   isConnected: boolean;
+  onOpenManifest?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -37,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   walletAddress,
   walletBalance,
   isConnected,
+  onOpenManifest,
 }) => {
   const [networkMenuOpen, setNetworkMenuOpen] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
@@ -112,7 +114,7 @@ export const Header: React.FC<HeaderProps> = ({
       <nav className="flex items-center gap-1.5 p-1 bg-[#13100c] border border-[#231d16] rounded-xl shadow-inner">
         <button
           onClick={() => setActiveTab('stream')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
             activeTab === 'stream'
               ? 'bg-[#261e16] text-[#e8b56f] border border-[#443321] shadow-[0_0_10px_rgba(217,155,77,0.15)] font-semibold'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1a1510]'
@@ -123,20 +125,8 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('manifest')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'manifest'
-              ? 'bg-[#261e16] text-[#e8b56f] border border-[#443321] shadow-[0_0_10px_rgba(217,155,77,0.15)] font-semibold'
-              : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1a1510]'
-          }`}
-        >
-          <FileCode2 className="w-4 h-4" />
-          <span>Manifest</span>
-        </button>
-
-        <button
           onClick={() => setActiveTab('payments')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
             activeTab === 'payments'
               ? 'bg-[#261e16] text-[#e8b56f] border border-[#443321] shadow-[0_0_10px_rgba(217,155,77,0.15)] font-semibold'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1a1510]'
@@ -148,7 +138,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         <button
           onClick={() => setActiveTab('docs')}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
             activeTab === 'docs'
               ? 'bg-[#261e16] text-[#e8b56f] border border-[#443321] shadow-[0_0_10px_rgba(217,155,77,0.15)] font-semibold'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-[#1a1510]'
@@ -160,7 +150,19 @@ export const Header: React.FC<HeaderProps> = ({
       </nav>
 
       {/* Right: Network & Wallet Badges */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Compact Manifest Inspector Button */}
+        {onOpenManifest && (
+          <button
+            onClick={onOpenManifest}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14110d] hover:bg-[#1f1710] border border-[#2b2218] hover:border-[#4d3822] rounded-xl text-xs font-medium text-neutral-300 hover:text-[#e8b56f] transition-all shadow-sm cursor-pointer group"
+            title="Inspect Stream Manifest & Cryptographic Tree"
+          >
+            <FileCode2 className="w-3.5 h-3.5 text-[#d89a4e] group-hover:scale-110 transition-transform" />
+            <span className="hidden sm:inline font-medium">Manifest</span>
+          </button>
+        )}
+
         {/* Network Selector Pill */}
         <div className="relative">
           <button

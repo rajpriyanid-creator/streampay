@@ -14,7 +14,7 @@ import {
   OpenSessionModal,
   ProofInspectorModal,
 } from './components/Modals';
-import { ManifestView } from './components/ManifestView';
+import { ManifestView, ManifestModal } from './components/ManifestView';
 import { PaymentsView } from './components/PaymentsView';
 import { DocsView } from './components/DocsView';
 import { SettingsView } from './components/SettingsView';
@@ -39,6 +39,7 @@ export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
 
   // App Navigation & UI State
+  const [isOpenManifestModal, setIsOpenManifestModal] = useState(false);
   const [activeNav, setActiveNav] = useState<'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs'>(() => {
     try {
       const saved = window.localStorage.getItem('streampay.active-nav.v1');
@@ -48,8 +49,7 @@ export default function App() {
     } catch {}
     return 'overview';
   });
-  const computedActiveTab: 'stream' | 'manifest' | 'payments' | 'docs' =
-    activeNav === 'manifest' ? 'manifest' :
+  const computedActiveTab: 'stream' | 'payments' | 'docs' =
     activeNav === 'payments' || activeNav === 'session' ? 'payments' :
     activeNav === 'docs' ? 'docs' : 'stream';
   const [currentStreamId, setCurrentStreamId] = useState(() => {
@@ -281,9 +281,8 @@ export default function App() {
     updateNav(nav as 'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs');
   };
 
-  const handleHeaderTabClick = (tab: 'stream' | 'manifest' | 'payments' | 'docs') => {
+  const handleHeaderTabClick = (tab: 'stream' | 'payments' | 'docs') => {
     if (tab === 'stream') updateNav('overview');
-    else if (tab === 'manifest') updateNav('manifest');
     else if (tab === 'payments') updateNav('payments');
     else if (tab === 'docs') updateNav('docs');
   };
@@ -298,6 +297,7 @@ export default function App() {
         walletAddress={wallet.address}
         walletBalance={wallet.balanceUSDC}
         isConnected={wallet.isConnected}
+        onOpenManifest={() => setIsOpenManifestModal(true)}
       />
 
       {/* Main 3-Column Layout */}
@@ -308,7 +308,8 @@ export default function App() {
           onSelectStream={handleSelectStream}
           activeNav={activeNav}
           onSelectNav={handleNavClick}
-           manifests={{}}
+          manifests={{}}
+          onOpenManifest={() => setIsOpenManifestModal(true)}
         />
 
         {/* Center Dynamic Content Area */}
@@ -375,6 +376,7 @@ export default function App() {
                 onPlaySegment={handlePlaySegment}
                 onRefreshManifest={handleRefreshManifest}
                 onInspectProof={(seg) => setInspectedSegment(seg)}
+                onOpenManifest={() => setIsOpenManifestModal(true)}
               />
             </div>
           )}
@@ -464,6 +466,12 @@ export default function App() {
         segment={inspectedSegment}
         manifest={manifest}
         onClose={() => setInspectedSegment(null)}
+      />}
+
+      {manifest && <ManifestModal
+        isOpen={isOpenManifestModal}
+        onClose={() => setIsOpenManifestModal(false)}
+        manifest={manifest}
       />}
     </div>
   );

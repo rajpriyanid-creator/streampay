@@ -21,6 +21,7 @@ interface SidebarProps {
   activeNav: string;
   onSelectNav: (nav: string) => void;
   manifests: Record<string, StreamManifest>;
+  onOpenManifest?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -28,31 +29,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectStream,
   activeNav,
   onSelectNav,
+  onOpenManifest,
 }) => {
   return (
-    <aside className="w-[240px] xl:w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-3.5 sm:p-4 select-none h-full overflow-y-auto overflow-x-hidden">
-      <div className="space-y-6">
+    <aside className="w-[240px] xl:w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col p-3 sm:p-3.5 select-none h-full overflow-hidden">
+      {/* Scrollable Top Section: Streams + Nav Items */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-3.5 pr-0.5">
         {/* STREAMS Section */}
-            <div>
-          <div className="text-[10px] font-bold text-[#786b5c] uppercase tracking-widest px-1 mb-2.5">
+        <div>
+          <div className="text-[10px] font-bold text-[#786b5c] uppercase tracking-widest px-1 mb-2">
             STREAMS
           </div>
-          <div className="space-y-2">
-            {/* Stream 1: Monad Keynote HD (Active in screenshot) */}
+          <div className="space-y-1.5">
+            {/* Stream 1: Monad Keynote HD */}
             <div
               onClick={() => onSelectStream('monad-keynote-hd')}
-              className={`p-2.5 rounded-2xl cursor-pointer transition-all flex items-center gap-3 ${
+              className={`p-2 rounded-xl cursor-pointer transition-all flex items-center gap-2.5 ${
                 currentStreamId === 'monad-keynote-hd'
                   ? 'bg-[#18130e] border border-[#7e5527] shadow-[0_0_15px_rgba(217,155,77,0.12)]'
                   : 'bg-[#120f0c] border border-[#211a13] hover:border-[#382b1d] hover:bg-[#16120e]'
               }`}
             >
-              {/* Thumbnail with sci-fi planet & play icon overlay */}
-              <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 bg-[#0c0804] border border-[#3b2a1a]">
+              {/* Thumbnail */}
+              <div className="relative w-9 h-9 rounded-lg overflow-hidden shrink-0 bg-[#0c0804] border border-[#3b2a1a]">
                 <div className="absolute inset-0 bg-gradient-to-tr from-[#1b1108] via-[#3d2410] to-[#7d491c] opacity-90" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-5 h-5 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-[#e8b56f]">
-                    <Play className="w-2.5 h-2.5 fill-current ml-[1px]" />
+                  <div className="w-4 h-4 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-[#e8b56f]">
+                    <Play className="w-2 h-2 fill-current ml-[1px]" />
                   </div>
                 </div>
               </div>
@@ -61,7 +64,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="text-xs font-semibold text-white tracking-tight truncate">
                   Monad Keynote HD
                 </div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">
+                <div className="text-[10px] text-[#8a7f72] mt-0.5 truncate">
                   5 segments · 10s
                 </div>
               </div>
@@ -70,17 +73,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* Stream 2: Demo Stream */}
             <div
               onClick={() => onSelectStream('demo-stream')}
-              className={`p-2.5 rounded-2xl cursor-pointer transition-all flex items-center gap-3 ${
+              className={`p-2 rounded-xl cursor-pointer transition-all flex items-center gap-2.5 ${
                 currentStreamId === 'demo-stream'
                   ? 'bg-[#18130e] border border-[#7e5527] shadow-[0_0_15px_rgba(217,155,77,0.12)]'
                   : 'bg-[#120f0c] border border-[#211a13] hover:border-[#382b1d] hover:bg-[#16120e]'
               }`}
             >
-              <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 bg-neutral-900 border border-[#2a2016]">
+              <div className="relative w-9 h-9 rounded-lg overflow-hidden shrink-0 bg-neutral-900 border border-[#2a2016]">
                 <div className="absolute inset-0 bg-gradient-to-tr from-[#0a111a] via-[#16273b] to-[#274668] opacity-90" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-5 h-5 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-neutral-400">
-                    <Play className="w-2.5 h-2.5 fill-current ml-[1px]" />
+                  <div className="w-4 h-4 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-neutral-400">
+                    <Play className="w-2 h-2 fill-current ml-[1px]" />
                   </div>
                 </div>
               </div>
@@ -89,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">
                   Demo Stream
                 </div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">
+                <div className="text-[10px] text-[#8a7f72] mt-0.5 truncate">
                   8 segments · 16s
                 </div>
               </div>
@@ -98,23 +101,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* Stream 3: Real Video Test */}
             <div
               onClick={() => onSelectStream('real-demo')}
-              className={`p-2.5 rounded-2xl cursor-pointer transition-all flex items-center gap-3 ${
+              className={`p-2 rounded-xl cursor-pointer transition-all flex items-center gap-2.5 ${
                 currentStreamId === 'real-demo'
                   ? 'bg-[#18130e] border border-[#7e5527] shadow-[0_0_15px_rgba(217,155,77,0.12)]'
                   : 'bg-[#120f0c] border border-[#211a13] hover:border-[#382b1d] hover:bg-[#16120e]'
               }`}
             >
-              <div className="relative w-11 h-11 rounded-xl overflow-hidden shrink-0 bg-[#102018] border border-[#244b35]">
+              <div className="relative w-9 h-9 rounded-lg overflow-hidden shrink-0 bg-[#102018] border border-[#244b35]">
                 <div className="absolute inset-0 bg-gradient-to-tr from-[#0b1d14] via-[#1f5b3b] to-[#80c879] opacity-90" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-5 h-5 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-[#b8efb2]">
-                    <Play className="w-2.5 h-2.5 fill-current ml-[1px]" />
+                  <div className="w-4 h-4 rounded-full bg-black/60 backdrop-blur-xs flex items-center justify-center text-[#b8efb2]">
+                    <Play className="w-2 h-2 fill-current ml-[1px]" />
                   </div>
                 </div>
               </div>
               <div className="overflow-hidden min-w-0 flex-1">
                 <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">Real Video Test</div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5 truncate">6 segments · 30s · H.264/AAC</div>
+                <div className="text-[10px] text-[#8a7f72] mt-0.5 truncate">6 segments · 30s · H.264/AAC</div>
               </div>
             </div>
           </div>
@@ -122,13 +125,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* NAVIGATION Section */}
         <div>
-          <div className="text-[10px] font-bold text-[#786b5c] uppercase tracking-widest px-1 mb-2.5">
+          <div className="text-[10px] font-bold text-[#786b5c] uppercase tracking-widest px-1 mb-2">
             NAVIGATION
           </div>
           <nav className="space-y-1">
             <button
               onClick={() => onSelectNav('overview')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeNav === 'overview'
                   ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
                   : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
@@ -139,20 +142,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
 
             <button
-              onClick={() => onSelectNav('manifest')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
-                activeNav === 'manifest'
-                  ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
-                  : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
-              }`}
-            >
-              <FileCode2 className="w-4 h-4" />
-              <span>Manifest</span>
-            </button>
-
-            <button
               onClick={() => onSelectNav('segments')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeNav === 'segments'
                   ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
                   : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
@@ -164,7 +155,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             <button
               onClick={() => onSelectNav('payments')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeNav === 'payments'
                   ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
                   : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
@@ -176,7 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             <button
               onClick={() => onSelectNav('session')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeNav === 'session'
                   ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
                   : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
@@ -188,7 +179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             <button
               onClick={() => onSelectNav('settings')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeNav === 'settings'
                   ? 'bg-[#261c12] text-[#e8ab56] border border-[#44311f] font-semibold shadow-[0_0_12px_rgba(217,155,77,0.12)]'
                   : 'text-[#8e8172] hover:text-neutral-200 hover:bg-[#15110d]'
@@ -198,40 +189,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span>Settings</span>
             </button>
           </nav>
+
+          {/* Small Secondary Manifest Button in Sidebar */}
+          {onOpenManifest && (
+            <div className="pt-2 border-t border-[#1e1710]/80 mt-2">
+              <button
+                onClick={onOpenManifest}
+                className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#7d7062] hover:text-[#e8ab56] hover:bg-[#14100c] transition-all cursor-pointer group"
+                title="Inspect Stream Manifest JSON & Merkle Tree"
+              >
+                <FileCode2 className="w-3.5 h-3.5 text-[#d89a4e]/70 group-hover:text-[#d89a4e]" />
+                <span>Inspect Manifest</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Bottom Tagline & Golden Wave Curves Graphic */}
-      <div className="relative pt-12 pb-2 overflow-hidden">
+      {/* Bottom Tagline & Golden Wave Curves Graphic - pinned shrink-0 mt-auto */}
+      <div className="relative shrink-0 mt-auto pt-3 pb-1 border-t border-[#1c1610] overflow-hidden">
         {/* Curved golden ribbon lines SVG */}
-        <div className="absolute -left-8 top-0 w-72 h-40 opacity-40 pointer-events-none">
-          <svg viewBox="0 0 320 160" fill="none" className="w-full h-full">
+        <div className="absolute -left-6 -top-2 w-64 h-24 opacity-35 pointer-events-none">
+          <svg viewBox="0 0 320 120" fill="none" className="w-full h-full">
             <path
-              d="M-30,130 C50,120 120,40 270,30"
+              d="M-30,100 C50,90 120,30 270,20"
               stroke="#e8ab56"
               strokeWidth="1.2"
               strokeOpacity="0.8"
             />
             <path
-              d="M-30,140 C60,130 130,50 290,40"
+              d="M-30,110 C60,100 130,40 290,30"
               stroke="#bc7c31"
               strokeWidth="1"
               strokeOpacity="0.6"
             />
             <path
-              d="M-30,150 C70,140 140,60 300,50"
+              d="M-30,120 C70,110 140,50 300,40"
               stroke="#ffd185"
               strokeWidth="0.8"
               strokeOpacity="0.5"
             />
             <path
-              d="M-30,120 C40,110 110,30 260,20"
+              d="M-30,90 C40,80 110,20 260,12"
               stroke="#d89a4e"
               strokeWidth="0.6"
               strokeOpacity="0.4"
             />
             <path
-              d="M-30,160 C80,150 150,70 310,60"
+              d="M-30,130 C80,120 150,60 310,50"
               stroke="#8f571b"
               strokeWidth="0.8"
               strokeOpacity="0.5"
@@ -239,13 +244,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </svg>
         </div>
 
-        <div className="relative z-10 space-y-2 px-1">
-          <h2 className="text-2xl font-bold tracking-tight text-[#f3ece0] leading-[1.12]">
-            Pay <br />
-            for what <br />
-            you watch.
+        <div className="relative z-10 px-1 py-0.5">
+          <h2 className="text-sm xl:text-base font-bold tracking-tight text-[#f3ece0] leading-snug">
+            Pay for what you watch.
           </h2>
-          <p className="text-xs text-[#8a7f72] leading-relaxed pt-0.5">
+          <p className="text-[11px] text-[#8a7f72] leading-snug mt-1">
             Decentralized video streaming with cryptographic proof.
           </p>
         </div>
