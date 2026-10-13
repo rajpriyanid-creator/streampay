@@ -114,7 +114,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div className="overflow-hidden">
                 <div className="text-xs font-semibold text-neutral-300 tracking-tight truncate">Real Video Test</div>
-                <div className="text-[11px] text-[#8a7f72] mt-0.5">14 segments · 28s · H.264/AAC</div>
+                <div className="text-[11px] text-[#8a7f72] mt-0.5">6 segments · 30s · H.264/AAC</div>
               </div>
             </div>
           </div>

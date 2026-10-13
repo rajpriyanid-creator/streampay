@@ -4,8 +4,8 @@ import path from 'path';
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
 import { config } from './config';
 
-export const UNITS_PER_SEGMENT = 2n;
-export const SEGMENT_DURATION_SEC = 2;
+export const UNITS_PER_SEGMENT = 5n;
+export const SEGMENT_DURATION_SEC = 5;
 export const UNIT_PRICE = 500n; // Existing canonical demo streams: 0.0005 USDC per unit.
 export const REAL_DEMO_UNIT_PRICE = 100n; // Real-video demo: 0.0001 USDC per unit.
 
