@@ -10,9 +10,11 @@ This document provides a comprehensive reference for all configuration options a
 | :--- | :--- | :--- | :--- |
 | `PORT` | Number | `4001` | HTTP listening port for the access service. |
 | `NETWORK` | String | `local` | Active network mode: `local` (Anvil 31337) or `monad-testnet` (Monad 10143). |
-| `RPC_URL` | String | `http://127.0.0.1:8545` | JSON-RPC provider endpoint for on-chain state inspection. |
+| `RPC_URL` | String | `http://127.0.0.1:8545` | Primary JSON-RPC provider endpoint for on-chain state inspection. |
+| `ALCHEMY_RPC_URL` | String | `""` | Optional Alchemy Monad RPC endpoint fallback. |
+| `ENVIO_HYPER_RPC` | String | `""` | Optional Envio HyperRPC endpoint fallback. |
 | `SETTLEMENT_ADDRESS` | Hex Address | *(read from manifests)* | Explicit contract address override. If unset, automatically reads from `manifests/{NETWORK}.json`. |
-| `CORS_ORIGIN` | String | `http://localhost:3000` | Allowed CORS origins for frontend web player requests. |
+| `CORS_ORIGIN` | String | `http://localhost:3000` | Allowed CORS origins for frontend web player requests (e.g. `https://streampay-frontend.onrender.com`). |
 | `ADMIN_TOKEN` | String | `""` | Bearer token required for admin endpoints (such as manual state flush). |
 | `STREAM_IDS` | Comma-list | `monad-keynote-hd,demo-stream` | Allowed stream identifiers served by the gateway. |
 | `MIN_UNIT_PRICE` | BigInt | `10000` | Minimum allowable payment unit price in token base units. |
@@ -32,11 +34,14 @@ This document provides a comprehensive reference for all configuration options a
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `VITE_NETWORK` | String | `local` | Initial network mode displayed in dashboard: `local` or `testnet`. |
-| `VITE_ACCESS_SERVICE_URL` | String | `http://localhost:4001` | URL of the backend Access Service gateway. |
+| `VITE_ACCESS_SERVICE_URL` | String | `http://localhost:4001` | URL of the backend Access Service gateway (or `https://streampay-access-service.onrender.com`). |
 | `VITE_STREAM_SIMULATION` | Boolean | `false` | Enable demo off-chain simulation mode without wallet connection. |
 | `VITE_MONAD_TESTNET_RPC` | String | `https://testnet-rpc.monad.xyz` | Default RPC endpoint for Monad Testnet (Chain ID 10143). |
+| `VITE_ALCHEMY_RPC_URL` | String | `""` | Optional Alchemy Monad Testnet RPC endpoint fallback. |
+| `VITE_ENVIO_HYPER_RPC` | String | `""` | Optional Envio HyperRPC endpoint fallback. |
 | `VITE_LOCAL_RPC` | String | `http://127.0.0.1:8545` | Default RPC endpoint for local Anvil development node. |
-| `VITE_SETTLEMENT_ADDRESS` | Hex Address | *(from testnet manifest)* | Deployed `StreamPaySettlement` address used by the testnet wallet flow. |
+| `VITE_SETTLEMENT_ADDRESS` | Hex Address | *(from testnet manifest)* | Deployed `StreamPaySettlement` address (`0x3E016fa87f7149971F65Df413b667C5355c5B060`). |
+| `VITE_DYNAMIC_ENVIRONMENT_ID` | String | `""` | Dynamic SDK environment ID for embedded EVM auth modal. |
 
 ---
 
@@ -56,4 +61,5 @@ This document provides a comprehensive reference for all configuration options a
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `ENVIO_RPC_URL` | String | `https://testnet-rpc.monad.xyz` | Monad testnet RPC for historical log ingestion. |
-| `START_BLOCK` | Number | *(Deployment Block)* | Block number from which the indexer syncs contract events. |
+| `START_BLOCK` | Number | `70464119` | Block number from which the indexer syncs contract events. |
+

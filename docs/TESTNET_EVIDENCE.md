@@ -3,10 +3,28 @@
 **Network:** Monad Testnet (Chain ID `10143`)  
 **RPC URL:** `https://testnet-rpc.monad.xyz`  
 **Approved payment token:** `0x534b2f3A21130d7a60830c2Df862319e593943A3` (6 decimals)  
-**Settlement contract:** `0x3E016fa87f7149971F65Df413b667C5355c5B060`
-**Deployment transaction:** `0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`
-**Deployment block:** `70464119`
-**Explorer:** https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060
+**Settlement contract:** `0x3E016fa87f7149971F65Df413b667C5355c5B060`  
+**Deployment transaction:** `0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`  
+**Deployment block:** `70464119`  
+**Explorer:** https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060  
+
+## Live Service Deployments on Render
+
+- **Frontend App:** [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com)
+- **Access Service Health:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health)
+
+Live HTTP verification output:
+```json
+{
+  "status": "ok",
+  "activeMode": "onchain",
+  "simulation": false,
+  "chainId": 10143,
+  "settlement": "0x3E016fa87f7149971F65Df413b667C5355c5B060",
+  "paymentToken": "0x534b2f3A21130d7a60830c2Df862319e593943A3",
+  "streamsAvailable": 3
+}
+```
 
 ## Deployment dry run
 
@@ -43,3 +61,4 @@ PRIVATE_KEY="<set in the shell; never commit or print it>" npx tsx scripts/e2e/t
 ```
 
 Do not replace `pending` with guessed addresses, hashes, blocks, or results.
+

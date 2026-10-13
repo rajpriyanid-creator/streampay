@@ -1,7 +1,9 @@
 # StreamPay — 3-Minute Hackathon Video Demo Script
 
 **Track:** 02 Consumer Products & Payments | **Platform:** Monad Testnet (Chain ID 10143)  
-**Total Duration:** 3:00 minutes (180 seconds)
+**Total Duration:** 3:00 minutes (180 seconds)  
+**Live Demo:** [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com)  
+**Live Access Service:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health)
 
 ---
 
@@ -15,31 +17,34 @@
 ---
 
 ### [0:30 - 1:15] Architecture: How It Works & Why Monad
-- **Visual:** Clean diagram showing Monad Escrow Contract (`StreamPaySettlement.sol`) + Access Service + Video Player.
+- **Visual:** Clean diagram showing Monad Escrow Contract (`StreamPaySettlement.sol`) + Access Service + Video Player + Envio HyperIndex.
 - **Presenter:**
   > "Streaming payments require three things traditional blockchains couldn't deliver: micro-cent fees, high concurrency, and sub-second finality.
   > 
-  > On Monad, StreamPay uses a three-tier hybrid architecture:
-  > 1. **Bounded Escrow:** The viewer locks a modest deposit (e.g. 2 USDC) on Monad in a single transaction.
+  > On Monad, StreamPay uses a hybrid zero-trust architecture:
+  > 1. **Bounded Escrow:** The viewer locks a modest deposit (e.g. 1 USDC) on Monad in a single transaction.
   > 2. **Off-Chain EIP-712 Vouchers:** As each 2-second video segment plays, the client signs an off-chain micro-voucher for $0.001. There are **zero gas fees** while watching.
   > 3. **Cryptographic Zero-Trust Delivery:** Every segment is hashed with SHA-256 and proven against a Keccak-256 Merkle root stored on-chain. The viewer's client verifies the math before signing.
-  > 4. **Batch Settlement:** The creator checkpoints the latest voucher on Monad to receive payouts, batching hundreds of off-chain payments into a single block."
+  > 4. **Batch Settlement:** The creator checkpoints the latest voucher on Monad to receive payouts, batching hundreds of off-chain payments into a single block.
+  > 5. **Real-Time Indexing:** Envio HyperIndex monitors on-chain settlement events with sub-second latency."
 
 ---
 
 ### [1:15 - 2:05] Live Testnet Demo: Playback, Checkpointing & Instant Refund
-- **Visual:** Screen recording of StreamPay Frontend on `localhost:3000` connected to Monad Testnet.
-- **Action 1:** Click **"Connect Wallet"** with MetaMask on Monad Testnet (Chain ID 10143).
+- **Visual:** Screen recording of StreamPay Frontend on [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com) connected to Monad Testnet.
+- **Action 1:** Click **"Connect Wallet"** with MetaMask or **Dynamic SDK** modal on Monad Testnet (Chain ID 10143).
 - **Action 2:** Select the **Monad Keynote HD** stream.
 - **Action 3:** Click **"Open Session (Monad Testnet)"**. MetaMask pops up. Confirm transaction.
 - **Action 4:** Session ID appears. Video begins streaming smoothly at 1080p.
 - **Presenter:**
-  > "Let's watch it live on Monad Testnet. I connect my wallet and open a session with a 1.00 USDC deposit. The transaction confirms in one second on Monad.
+  > "Let's watch it live on Monad Testnet. I connect my wallet—either with standard Web3 or Dynamic's embedded auth—and open a session with a 1.00 USDC deposit. The transaction confirms in one second on Monad.
   > 
   > As the video plays, notice the real-time ticker: every 2 seconds, our custom HLS fragment loader downloads the media chunk, verifies its SHA-256 hash against the Merkle tree, and signs a micro-voucher for 500 base units ($0.0005 per second).
   > 
+  > Notice the Envio HyperIndex telemetry card live-tracking our session events.
+  > 
   > Now I click **Checkpoint**. The creator claims earned revenue on-chain.
-  > Next, I pause and click **Close Session**. In a single Monad transaction, the session closes cooperatively: the creator receives $0.006 USDC, and my remaining $0.994 USDC deposit is instantly returned to my wallet. No money is locked or wasted."
+  > Next, I pause and click **Close Session**. In a single Monad transaction, the session closes cooperatively: the creator receives earned USDC, and my remaining escrow balance is immediately refunded. If I ever have a pull-credited refund, the 'Claim refund' button lets me claim it directly via `claim(address token)` with real MonadScan receipts."
 
 ---
 
@@ -58,6 +63,7 @@
 ### [2:35 - 3:00] Conclusion & Submission Overview
 - **Visual:** GitHub repository, test badges, and Monad Explorer contract page.
 - **Presenter:**
-  > "StreamPay is fully open-source with 47 passing Foundry smart contract tests, 13 concurrency ledger tests, and 26 end-to-end integration tests. The settlement contract is live on Monad Testnet with verified payment token integration.
+  > "StreamPay is fully open-source with 47 passing Foundry smart contract tests, 13 concurrency ledger tests, and 26 end-to-end integration tests. The settlement contract and access gateway are live on Monad Testnet with Envio HyperIndex and Dynamic SDK integrations.
   > 
-  > StreamPay turns pay-per-second streaming from an impossible dream into a reality on Monad. Thank you!"
+  > StreamPay turns pay-per-second streaming from an impossible dream into a reality on Monad. Check out the live demo at streampay-frontend.onrender.com. Thank you!"
+

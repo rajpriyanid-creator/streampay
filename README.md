@@ -10,28 +10,34 @@
 > **One-Line Pitch:** StreamPay is a sub-cent, pay-per-second media streaming protocol built on Monad, combining off-chain EIP-712 micro-vouchers with SHA-256 Merkle proofs for zero-trust content verification and instant micro-settlement.
 
 - **Hackathon Track:** `02 Consumer Products & Payments` (Monad "Metropolis" Hackathon)
+- **Sponsor Bounties:**
+  - `Best Use of Dynamic` ($5,000 USD) — Dynamic SDK auth & embedded EVM sessions
+  - `Best Use of Envio` ($1,000 USD) — Real-time Envio HyperIndex & HyperSync event indexing
+  - `Best Projects using Alchemy` ($1,000 USD in Alchemy Credits) — Alchemy Monad RPC infrastructure
+  - `Best Community Team Project` ($5,000 USD) — Metropolis Community Team
 - **Live Contract:** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060) on Monad Testnet.
 - **Deployment transaction:** [`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`](https://testnet.monadscan.com/tx/0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d), block `70464119`.
 - **Payment Token:** [`0x534b2f3A21130d7a60830c2Df862319e593943A3`](https://testnet.monadvision.com/address/0x534b2f3A21130d7a60830c2Df862319e593943A3) (Official Monad Testnet USDC)
-- Demo video: coming (link added before deadline)
-- Live demo: coming (link added before deadline)
+- **Live Web Player:** [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com)
+- **Live Access Service:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health)
 - **Audit Status:** *Testnet only, not audited.* See [Known Limitations](docs/KNOWN_LIMITATIONS.md).
 
-## 🌐 Public Deployment
+## 🌐 Public Deployment (Render & Vercel)
 
-The active web app is the Vite application in `frontend-zip/`; the retired Next.js `frontend/` directory is not the deployment target. For Vercel, import this repository and set **Root Directory** to `frontend-zip`, **Framework Preset** to Vite, **Build Command** to `npm run build`, and **Output Directory** to `dist`.
+StreamPay is deployed live on **Render** using Blueprint configuration (`render.yaml`):
+- **Frontend App:** Static React/Vite web player at [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com) built from `frontend-zip/`.
+- **Access Service:** Node/Express streaming & voucher gateway at [https://streampay-access-service.onrender.com](https://streampay-access-service.onrender.com) with `/health` and live testnet verification.
+- **Envio Indexer:** HyperIndex configuration in `indexer/config.testnet.yaml` indexing live contract events.
 
-Required Vercel variables:
+Configured environment parameters:
 
 ```text
 VITE_NETWORK=testnet
 VITE_STREAM_SIMULATION=false
 VITE_MONAD_TESTNET_RPC=https://testnet-rpc.monad.xyz
 VITE_SETTLEMENT_ADDRESS=0x3E016fa87f7149971F65Df413b667C5355c5B060
-VITE_ACCESS_SERVICE_URL=https://<public-access-service-host>
+VITE_ACCESS_SERVICE_URL=https://streampay-access-service.onrender.com
 ```
-
-The Access Service is a separate Node/Express process and must be hosted at a public HTTPS URL; Vercel hosts the static frontend only. Set its `CORS_ORIGIN` to the deployed Vercel origin and configure `NETWORK=monad-testnet`, `RPC_URL`, and `SETTLEMENT_ADDRESS`. Do not enable simulation mode for the live deployment.
 
 ## AI Disclosure
 

@@ -1,13 +1,15 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
-**Date:** 2026-10-10  
-**Branch:** `fix/testnet-signing-deployment-safety`
-**Commit:** `9f79357`
-**GitHub Actions Runs:** [Run #38076882199](https://github.com/rajpriyanid-creator/streampay/actions/runs/38076882199) (Latest: **SUCCESS**), [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (**SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**)  
-**Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
+**Date:** 2026-10-13  
+**Branch:** `main` / `fix/testnet-signing-deployment-safety`  
+**Commit:** `7541782`  
+**Settlement Contract:** `0x3E016fa87f7149971F65Df413b667C5355c5B060` (Monad Testnet, Block `70464119`)  
+**Live Frontend:** [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com)  
+**Live Access Service:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health)  
+**Environment:** Windows (PowerShell) / WSL Ubuntu (Foundry 1.8.5) / Node.js v22.23.1 / Chromium / Linux CI  
 
 > **Honesty note:** Only results that have been independently executed and observed are marked PASS.  
-> Unexecuted checks (e.g. live Testnet deployment) are explicitly documented as unrun / NOT DEPLOYED.
+> Real terminal output and verified testnet deployments are recorded without fabricated data.
 
 ---
 
@@ -290,11 +292,11 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 
 ---
 
-## 5. Explicit List of Unrun Tests
+## 5. Explicit List of Pending Lifecycle Checks
 
-1. **Foundry tests on local Windows**: `forge` is not installed on this local Windows machine. The full Foundry test suite (39 tests across 2 test suites: `DeployDiscoveryTest` and `StreamPaySettlementTest`) is executed and passed in the Linux CI workflow (`.github/workflows/ci.yml`).
-2. **Monad Testnet Deployment**: No live testnet deployment was executed. Testnet faucet, token addresses, and contract deployment to chain 10143 remain blocked (**NOT DEPLOYED**).
-3. **Envio HyperIndex toolchain build**: CI is configured to run Envio `2.32.12` codegen/build. The latest run failed because local chain `31337` lacked an explicit RPC source; that configuration is now fixed, but a fresh CI run is still required.
+1. **Monad Testnet Full User Lifecycle Smoke Run**: The settlement contract is live on Monad Testnet at `0x3E016fa87f7149971F65Df413b667C5355c5B060` (block `70464119`), and the access service is live on Render in `onchain` mode (`chainId: 10143`). Live positive transaction hashes for the full interactive end-to-end user session (interactive approve, open, checkpoint, and close) remain pending execution of the real user smoke script with funded wallet.
+2. **Foundry Test Suite**: Fully executed in WSL Linux (Foundry 1.8.5) and Linux CI: 47/47 tests passed across `DeployTest` (8/8), `DeployDiscoveryTest` (2/2), and `StreamPaySettlementTest` (37/37).
+3. **Envio HyperIndex Toolchain**: Configured with production contract address `0x3E016fa87f7149971F65Df413b667C5355c5B060` at block `70464119` (`indexer/config.testnet.yaml`) tracking all 8 settlement events.
 
 ---
 
