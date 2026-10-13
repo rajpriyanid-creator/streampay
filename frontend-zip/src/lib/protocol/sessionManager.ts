@@ -75,6 +75,22 @@ async function selectedAccount(provider: EthereumProvider, requested?: string[])
 
 function requireAddress(value: string, label: string): Address { if (!value || !/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${label} is not configured as a valid address`); return value as Address; }
 
+async function requestCurrentWalletAccounts(provider: EthereumProvider): Promise<string[]> {
+  // Re-open the wallet account permission UI so switching accounts in the
+  // extension also changes the account authorized for this site.
+  try {
+    await provider.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
+  } catch (error: unknown) {
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: number }).code
+      : undefined;
+    // Rabby and some injected providers do not implement this optional method.
+    // A user rejection must still stop the connection attempt.
+    if (code === 4001) throw error;
+  }
+  return await provider.request({ method: 'eth_requestAccounts' }) as string[];
+}
+
 export class LocalTestProvider {
   constructor(network: string) { if (network === 'testnet' || network === 'mainnet') throw new Error(`Security Violation: LocalTestProvider is strictly forbidden on ${network}`); }
 }
@@ -168,7 +184,7 @@ export class ProtocolLifecycleManager {
     if (this.network === 'local' && simulationMode) { this.wallet.isConnected = true; this.notify(); return; }
     const provider = injectedProvider();
     const chainId = this.network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
-    const accounts = await provider.request({ method: 'eth_requestAccounts' }) as string[];
+    const accounts = await requestCurrentWalletAccounts(provider);
     const address = requireAddress(await selectedAccount(provider, accounts), 'Selected wallet account');
     let actualChain = Number(await provider.request({ method: 'eth_chainId' }));
     if (actualChain !== chainId) {
