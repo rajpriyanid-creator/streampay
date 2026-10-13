@@ -7,10 +7,9 @@
 ### Hackathon Tracks & Selected Sponsor Bounties:
 - **Primary Track:** `02 Consumer Products & Payments` ($30,000 USD)
 - **Sponsor Bounties:**
-  - **Best Use of Dynamic** (Dynamic — $5,000 USD): Full Dynamic SDK integration (`@dynamic-labs-sdk/client` & `@dynamic-labs-sdk/evm`) providing seamless authentication, embedded EVM wallets, and session management.
-  - **Best Use of Envio** (Envio — $1,000 USD): Production-ready Envio HyperIndex configuration (`indexer/config.testnet.yaml`, `indexer/schema.graphql`) indexing all 8 on-chain settlement events on Monad Testnet (Chain ID `10143`, start block `70464119`), plus Envio HyperRPC fallback and live frontend indexer telemetry.
-  - **Best Projects using Alchemy** (Alchemy — $1,000 USD in Alchemy Credits): Integrated Alchemy Monad RPC endpoint support across access-service gateway and web client.
-  - **Best Community Team Project** (Monad Foundation — $5,000 USD): Community-built open-source project advancing consumer UX on Monad.
+  - **Best Use of Dynamic** (Dynamic — $5,000 USD): Native Dynamic React SDK integration (`@dynamic-labs/sdk-react-core` & `@dynamic-labs/ethereum`) with `DynamicContextProvider`, `EthereumWalletConnectors` for Monad Testnet, interactive auth modal, and bi-directional wallet synchronization with the StreamPay streaming and settlement engine.
+  - **Best Use of Envio** (Envio — $1,000 USD): Production-ready Envio HyperIndex configuration (`indexer/config.testnet.yaml`, `indexer/schema.graphql`, `indexer/src/EventHandlers.ts`) indexing all 8 settlement events on Monad Testnet (Chain ID `10143`, block `70464119`), plus client-side Envio telemetry client (`frontend-zip/src/lib/envioClient.ts`) driving live on-chain block and event telemetry in the payments ledger.
+  - **Best Community Team Project** (Monad Foundation — $5,000 USD): Community-built open-source project advancing consumer video streaming payments UX on Monad.
 
 ---
 

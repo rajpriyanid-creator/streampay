@@ -11,10 +11,10 @@
 
 - **Hackathon Track:** `02 Consumer Products & Payments` (Monad "Metropolis" Hackathon)
 - **Sponsor Bounties:**
-  - `Best Use of Dynamic` ($5,000 USD) — Dynamic SDK auth & embedded EVM sessions
-  - `Best Use of Envio` ($1,000 USD) — Real-time Envio HyperIndex & HyperSync event indexing
-  - `Best Projects using Alchemy` ($1,000 USD in Alchemy Credits) — Alchemy Monad RPC infrastructure
+  - `Best Use of Dynamic` ($5,000 USD) — Native Dynamic React SDK embedded auth & EVM wallet sessions
+  - `Best Use of Envio` ($1,000 USD) — Real-time Envio HyperIndex configuration & on-chain event telemetry
   - `Best Community Team Project` ($5,000 USD) — Metropolis Community Team
+
 - **Live Contract:** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060) on Monad Testnet.
 - **Deployment transaction:** [`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`](https://testnet.monadscan.com/tx/0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d), block `70464119`.
 - **Payment Token:** [`0x534b2f3A21130d7a60830c2Df862319e593943A3`](https://testnet.monadvision.com/address/0x534b2f3A21130d7a60830c2Df862319e593943A3) (Official Monad Testnet USDC)

@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2 } from 'lucide-react';
 import { StreamSessionState, WalletState } from '../lib/protocol/sessionManager';
+import { fetchLiveEnvioTelemetry, EnvioTelemetry } from '../lib/envioClient';
 
 interface PaymentsViewProps {
   session: StreamSessionState;
@@ -25,8 +26,25 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   onRefreshClaimable,
 }) => {
   const [minutes, setMinutes] = useState('10');
+  const [envioTelemetry, setEnvioTelemetry] = useState<EnvioTelemetry | null>(null);
+  const [isRefreshingEnvio, setIsRefreshingEnvio] = useState(false);
   const ratePerSecond = 0.0005;
-  useEffect(() => { onRefreshClaimable(); }, [onRefreshClaimable]);
+
+  const refreshEnvio = useCallback(async () => {
+    setIsRefreshingEnvio(true);
+    try {
+      const data = await fetchLiveEnvioTelemetry();
+      setEnvioTelemetry(data);
+    } finally {
+      setIsRefreshingEnvio(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    onRefreshClaimable();
+    void refreshEnvio();
+  }, [onRefreshClaimable, refreshEnvio]);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -160,18 +178,30 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
             <span className="font-bold text-white uppercase tracking-wider text-[11px]">
-              Envio HyperIndex & HyperSync Verified
+              Envio HyperIndex & HyperSync Live Telemetry
             </span>
           </div>
-          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950/50 border border-cyan-800/40 text-cyan-300">
-            Monad Testnet (10143) · Block 70464119+
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={refreshEnvio}
+              disabled={isRefreshingEnvio}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1d1711] hover:bg-[#281f17] border border-[#3d2e1f] text-[#e8b56f] flex items-center gap-1 transition-colors"
+            >
+              <RefreshCw className={`w-3 h-3 ${isRefreshingEnvio ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950/50 border border-cyan-800/40 text-cyan-300">
+              Monad Testnet (10143) · Block {envioTelemetry ? envioTelemetry.currentBlock.toString() : '70464119+'}
+            </span>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-neutral-300">
           <div>
             <div className="text-[10px] text-neutral-500 uppercase font-semibold">Indexer Architecture</div>
             <div className="font-semibold text-white mt-0.5">Envio HyperIndex v2.5</div>
-            <div className="text-[11px] text-neutral-400 mt-0.5">Sub-second event pipeline & schema</div>
+            <div className="text-[11px] text-neutral-400 mt-0.5">
+              Syncing from block {envioTelemetry ? envioTelemetry.startBlock.toString() : '70464119'}
+            </div>
           </div>
           <div>
             <div className="text-[10px] text-neutral-500 uppercase font-semibold">Indexed Target</div>
@@ -181,12 +211,46 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
             <div className="text-[11px] text-neutral-400 mt-0.5">Settlement & channel escrows</div>
           </div>
           <div>
-            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Event Entities</div>
-            <div className="text-xs text-neutral-200 mt-0.5">StreamSession, Checkpoint, Claim</div>
-            <div className="text-[11px] text-emerald-400 mt-0.5">Real-time sync on Monad</div>
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Indexed Events</div>
+            <div className="text-xs text-neutral-200 mt-0.5">
+              {envioTelemetry ? `${envioTelemetry.eventsCount} events indexed` : 'Querying on-chain…'}
+            </div>
+            <div className="text-[11px] text-emerald-400 mt-0.5 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+              <span>Live on Monad Testnet</span>
+            </div>
           </div>
         </div>
+
+        {envioTelemetry && envioTelemetry.events.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-[#1a140e] space-y-1.5">
+            <div className="text-[10px] uppercase font-semibold text-neutral-500">Live Indexed Event Stream:</div>
+            {envioTelemetry.events.map((evt) => (
+              <div key={evt.id} className="flex items-center justify-between p-2 rounded bg-[#0b0907] border border-[#1e1710] text-[11px]">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-cyan-300 font-mono">{evt.eventName}</span>
+                  <span className="text-neutral-400">{evt.summary}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-neutral-500 font-mono text-[10px]">Block #{evt.blockNumber.toString()}</span>
+                  {evt.transactionHash && (
+                    <a
+                      href={`https://testnet.monadscan.com/tx/${evt.transactionHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[#e8b56f] hover:underline font-mono text-[10px] flex items-center gap-0.5"
+                    >
+                      <span>{evt.transactionHash.slice(0, 8)}...</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
 
       {/* Vouchers & Verification History Table */}
       <div className="rounded-2xl bg-[#13100c] border border-[#241d16] overflow-hidden">

@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { protocolManager, NetworkType } from '../lib/protocol/sessionManager';
-import { initDynamicClient } from '../lib/dynamic';
+import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
 
 interface HeaderProps {
   activeTab: 'stream' | 'manifest' | 'payments' | 'docs';
@@ -42,6 +42,13 @@ export const Header: React.FC<HeaderProps> = ({
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [walletError, setWalletError] = useState('');
+  const { primaryWallet, setShowAuthFlow, handleLogOut } = useDynamicContext();
+
+  React.useEffect(() => {
+    if (primaryWallet?.address && primaryWallet.address.toLowerCase() !== walletAddress.toLowerCase()) {
+      protocolManager.syncExternalAccount(primaryWallet.address);
+    }
+  }, [primaryWallet?.address, walletAddress]);
 
   const truncatedAddress = walletAddress
     ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
@@ -63,8 +70,14 @@ export const Header: React.FC<HeaderProps> = ({
   const handleWalletAction = async () => {
     setWalletError('');
     try {
-      if (isConnected) protocolManager.disconnectWallet();
-      else await protocolManager.connectWallet();
+      if (isConnected) {
+        if (primaryWallet) {
+          try { await handleLogOut(); } catch {}
+        }
+        protocolManager.disconnectWallet();
+      } else {
+        await protocolManager.connectWallet();
+      }
       setWalletMenuOpen(false);
     } catch (error) {
       const detail = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error);
@@ -265,14 +278,15 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
                 <button
                   onClick={() => {
-                    initDynamicClient();
-                    alert('Dynamic SDK active on Monad Testnet: Embedded passkey & EVM wallet sessions enabled.');
+                    setWalletMenuOpen(false);
+                    setShowAuthFlow(true);
                   }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-cyan-300 hover:bg-[#1d1711] transition-colors"
                 >
                   <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Dynamic Auth & Wallets</span>
+                  <span>Dynamic Auth & Embedded Wallets</span>
                 </button>
+
               </div>
             </div>
           )}

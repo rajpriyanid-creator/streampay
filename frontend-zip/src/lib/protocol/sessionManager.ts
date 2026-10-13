@@ -217,6 +217,16 @@ export class ProtocolLifecycleManager {
     }
   }
 
+  async syncExternalAccount(account: string): Promise<void> {
+    if (!account) return;
+    const addr = account as Address;
+    this.walletDisconnectRequested = false;
+    this.wallet.address = addr;
+    this.wallet.isConnected = true;
+    await this.refreshBalance(addr);
+    this.notify();
+  }
+
   setNetwork(network: NetworkType): void {
     this.network = network; this.wallet.network = network; this.wallet.chainId = network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
     this.session.contractAddress = network === 'testnet' ? (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address : '';
