@@ -44,9 +44,10 @@ export interface CheckpointSyncResponse { success: boolean; settledUnits?: strin
 
 function apiError(status: number, data: unknown): Error {
   const body = data as { error?: string; reason?: string; message?: string; code?: string; requestId?: string };
-  const detail = body.message || body.error || body.reason || `Access service HTTP ${status}`;
+  const detail = body.message || body.error || `Access service HTTP ${status}`;
+  const reason = body.reason ? ` (${body.reason})` : '';
   const requestId = body.requestId ? ` [request ${body.requestId}]` : '';
-  return new Error(`${body.code ? `${body.code}: ` : ''}${detail}${requestId}`);
+  return new Error(`${body.code ? `${body.code}: ` : ''}${detail}${reason}${requestId}`);
 }
 
 export class AccessServiceClient {

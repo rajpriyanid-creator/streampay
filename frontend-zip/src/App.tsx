@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { Player } from './components/Player';
@@ -23,6 +23,7 @@ import {
   protocolManager,
   WalletState,
   StreamSessionState,
+  VerificationLog,
   NetworkType,
 } from './lib/protocol/sessionManager';
 import { accessService, HealthResponse } from './lib/protocol/accessClient';
@@ -47,6 +48,7 @@ export default function App() {
   const [verifiedMedia, setVerifiedMedia] = useState<Uint8Array | null>(null);
   const [verifiedMediaType, setVerifiedMediaType] = useState('video/mp2t');
   const [verifiedSegments, setVerifiedSegments] = useState<Record<number, { data: Uint8Array; mimeType: string }>>({});
+  const inFlightSegments = useRef(new Map<number, Promise<VerificationLog>>());
   const [creatorAddress, setCreatorAddress] = useState('');
   const [creatorState, setCreatorState] = useState(protocolManager.getCreatorState());
 
@@ -113,48 +115,51 @@ export default function App() {
     }
   }, []);
 
-  // Handle segment playback with cryptographic voucher request & verification
-  const handlePlaySegment = useCallback(
-    async (segmentIndex: number) => {
-      if (!manifest || session.status !== 'active') {
-        setIsOpenSessionModal(true);
-        return;
+  const loadVerifiedSegment = useCallback(async (segmentIndex: number): Promise<VerificationLog> => {
+    if (!manifest) throw new Error('Stream manifest is unavailable.');
+    const cached = verifiedSegments[segmentIndex];
+    if (cached) return { mediaData: cached.data, mediaMimeType: cached.mimeType } as VerificationLog;
+    const existing = inFlightSegments.current.get(segmentIndex);
+    if (existing) return existing;
+    const request = protocolManager.requestAndVerifySegment(manifest, segmentIndex);
+    inFlightSegments.current.set(segmentIndex, request);
+    try {
+      const verification = await request;
+      if (verification.mediaData) {
+        setVerifiedSegments((previous) => ({ ...previous, [segmentIndex]: { data: verification.mediaData!, mimeType: verification.mediaMimeType || 'video/mp2t' } }));
       }
+      return verification;
+    } finally {
+      inFlightSegments.current.delete(segmentIndex);
+    }
+  }, [manifest, verifiedSegments]);
 
-      try {
-        setCurrentSegmentIndex(segmentIndex);
-        const cached = verifiedSegments[segmentIndex];
-        if (cached) {
-          setVerifiedMedia(cached.data);
-          setVerifiedMediaType(cached.mimeType);
-          setIsPlaying(true);
-          return;
-        }
-        const verification = await protocolManager.requestAndVerifySegment(manifest, segmentIndex);
-        setVerifiedMedia(verification.mediaData || null);
-        setVerifiedMediaType(verification.mediaMimeType || 'video/mp2t');
-        if (verification.mediaData) {
-          setVerifiedSegments((previous) => ({ ...previous, [segmentIndex]: { data: verification.mediaData!, mimeType: verification.mediaMimeType || 'video/mp2t' } }));
-        }
-        setIsPlaying(true);
-      } catch (err: unknown) {
-        console.error('Play segment error:', err);
-        alert(err instanceof Error ? err.message : 'Error playing segment');
-      }
-    },
-    [session.status, manifest, verifiedSegments]
-  );
+  // Handle segment playback with serialized cryptographic voucher requests.
+  const handlePlaySegment = useCallback(async (segmentIndex: number) => {
+    if (!manifest || session.status !== 'active') { setIsOpenSessionModal(true); return; }
+    try {
+      setCurrentSegmentIndex(segmentIndex);
+      const verification = await loadVerifiedSegment(segmentIndex);
+      setVerifiedMedia(verification.mediaData || null);
+      setVerifiedMediaType(verification.mediaMimeType || 'video/mp2t');
+      setIsPlaying(true);
+    } catch (err: unknown) {
+      setIsPlaying(false);
+      console.error('Play segment error:', err);
+      alert(err instanceof Error ? err.message : 'Error playing segment');
+    }
+  }, [session.status, manifest, loadVerifiedSegment]);
 
   useEffect(() => {
     const nextIndex = currentSegmentIndex + 1;
-    if (!manifest || session.status !== 'active' || nextIndex >= manifest.totalSegments || verifiedSegments[nextIndex]) return;
+    if (!manifest || session.status !== 'active' || !verifiedSegments[currentSegmentIndex] || nextIndex >= manifest.totalSegments || verifiedSegments[nextIndex]) return;
     let cancelled = false;
-    protocolManager.requestAndVerifySegment(manifest, nextIndex).then((verification) => {
+    loadVerifiedSegment(nextIndex).then((verification) => {
       if (cancelled || !verification.mediaData) return;
       setVerifiedSegments((previous) => ({ ...previous, [nextIndex]: { data: verification.mediaData!, mimeType: verification.mediaMimeType || 'video/mp2t' } }));
     }).catch((error) => console.warn('Segment prefetch failed:', error));
     return () => { cancelled = true; };
-  }, [currentSegmentIndex, manifest, session.status, verifiedSegments]);
+  }, [currentSegmentIndex, manifest, session.status, verifiedSegments, loadVerifiedSegment]);
 
   useEffect(() => {
     const current = verifiedSegments[currentSegmentIndex];
