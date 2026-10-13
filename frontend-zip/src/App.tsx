@@ -211,6 +211,9 @@ export default function App() {
     }
   };
 
+  const handleRefreshClaimable = useCallback(() => { void protocolManager.refreshClaimableRefund().catch((error) => console.warn('Claimable refund lookup failed:', error)); }, []);
+  const handleClaimRefund = async () => { try { const tx = await protocolManager.claimRefund(); alert(tx ? `Refund claimed. Tx Hash: ${tx}` : 'Refund claimed in simulation mode.'); } catch (err) { alert(err instanceof Error ? err.message : 'Refund claim failed'); } };
+
   const handleRefreshManifest = async () => {
     try {
       const m = await accessService.getManifest(currentStreamId);
@@ -306,6 +309,8 @@ export default function App() {
               wallet={wallet}
               onCheckpoint={handleCheckpointSession}
               onCloseSession={handleCloseSession}
+              onClaimRefund={handleClaimRefund}
+              onRefreshClaimable={handleRefreshClaimable}
             />
           )}
 

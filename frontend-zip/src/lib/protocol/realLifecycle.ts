@@ -31,6 +31,8 @@ const settlementAbi = [
   { type: 'function', name: 'openWithSignature', stateMutability: 'nonpayable', inputs: [{ name: 'offer', type: 'tuple', components: offerComponents }, { name: 'offerSig', type: 'bytes' }, { name: 'cfg', type: 'tuple', components: cfgComponents }, { name: 'cfgSig', type: 'bytes' }], outputs: [] },
   { type: 'function', name: 'checkpoint', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }, { name: 'voucher', type: 'tuple', components: [{ name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' }] }, { name: 'voucherSig', type: 'bytes' }], outputs: [] },
   { type: 'function', name: 'closeCooperative', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }, { name: 'voucher', type: 'tuple', components: [{ name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' }] }, { name: 'voucherSig', type: 'bytes' }, { name: 'ack', type: 'tuple', components: [{ name: 'sessionId', type: 'bytes32' }, { name: 'cumulativeUnits', type: 'uint64' }, { name: 'voucherDigest', type: 'bytes32' }] }, { name: 'ackSig', type: 'bytes' }], outputs: [] },
+  { type: 'function', name: 'claim', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }], outputs: [] },
+  { type: 'function', name: 'claimable', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }, { name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] },
 ] as const;
 const tokenAbi = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] },
@@ -103,6 +105,17 @@ export async function closeSession(p: { walletClient: any; rpc: string; settleme
   const txHash = await p.walletClient.writeContract({ address: p.settlement, abi: settlementAbi, functionName: 'closeCooperative', args: [p.sessionId, voucher, p.voucherSig, ack, p.ackSig], account: p.account });
   const receipt = await pc.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== 'success') throw new Error(`Close failed: ${txHash}`);
+  return txHash;
+}
+
+export async function readClaimable(p: { rpc: string; settlement: Address; token: Address; account: Address }): Promise<bigint> {
+  return await publicClient(p.rpc).readContract({ address: p.settlement, abi: settlementAbi, functionName: 'claimable', args: [p.token, p.account] }) as bigint;
+}
+
+export async function claimRefund(p: { walletClient: any; rpc: string; settlement: Address; token: Address; account: Address }): Promise<Hex> {
+  const txHash = await p.walletClient.writeContract({ address: p.settlement, abi: settlementAbi, functionName: 'claim', args: [p.token], account: p.account });
+  const receipt = await publicClient(p.rpc).waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') throw new Error(`Claim failed: ${txHash}`);
   return txHash;
 }
 

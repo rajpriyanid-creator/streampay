@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2 } from 'lucide-react';
 import { StreamSessionState, WalletState } from '../lib/protocol/sessionManager';
 
@@ -12,6 +12,8 @@ interface PaymentsViewProps {
   wallet: WalletState;
   onCheckpoint: () => void;
   onCloseSession: () => void;
+  onClaimRefund: () => void;
+  onRefreshClaimable: () => void;
 }
 
 export const PaymentsView: React.FC<PaymentsViewProps> = ({
@@ -19,7 +21,12 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   wallet,
   onCheckpoint,
   onCloseSession,
+  onClaimRefund,
+  onRefreshClaimable,
 }) => {
+  const [minutes, setMinutes] = useState('10');
+  const ratePerSecond = 0.0005;
+  useEffect(() => { onRefreshClaimable(); }, [onRefreshClaimable]);
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -55,7 +62,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
           <div className="text-xs font-medium text-neutral-400">Session Status</div>
           <div className="text-lg font-bold text-white mt-1 capitalize flex items-center gap-2">
@@ -88,7 +95,30 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
             {session.settledUnits} units
           </div>
         </div>
+
+        <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16]">
+          <div className="text-xs font-medium text-neutral-400">Refund Allocation</div>
+          <div className="text-lg font-bold text-emerald-300 font-mono mt-1">{session.refundUSDC} USDC</div>
+          <div className="text-[10px] text-neutral-500 mt-1">{session.refundStatus}</div>
+        </div>
       </div>
+
+      <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16] flex flex-wrap items-end gap-4">
+        <div>
+          <div className="text-xs text-neutral-400 mb-1">Cost calculator</div>
+          <label className="text-xs text-neutral-500">Minutes watched</label>
+          <input value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="0" className="block mt-1 w-28 rounded-lg bg-[#080705] border border-[#3b2a1a] px-2 py-1 text-sm text-white" />
+        </div>
+        <div className="text-sm text-neutral-300">StreamPay: <strong className="text-[#e8b56f]">{(Math.max(0, Number(minutes) || 0) * 60 * ratePerSecond).toFixed(4)} USDC</strong></div>
+        <div className="text-sm text-neutral-500">Subscription example: <strong className="text-neutral-300">$22.99/month</strong></div>
+      </div>
+
+      {Number(session.claimableUSDC) > 0 && (
+        <div className="p-4 rounded-xl border border-emerald-900/60 bg-emerald-950/20 flex items-center justify-between gap-4">
+          <div><div className="text-sm font-semibold text-emerald-200">Claimable refund</div><div className="text-xs text-emerald-300/70">{session.claimableUSDC} USDC is held by the settlement contract.</div></div>
+          <button onClick={onClaimRefund} className="px-4 py-2 rounded-lg bg-emerald-400 text-black text-xs font-bold">Claim refund</button>
+        </div>
+      )}
 
       {/* Contract & Token Specs */}
       <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16] space-y-2 text-xs">
@@ -177,6 +207,11 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
             </table>
           </div>
         )}
+      </div>
+
+      <div className="rounded-2xl bg-[#13100c] border border-[#241d16] overflow-hidden">
+        <div className="p-4 border-b border-[#1f1812]"><h3 className="text-sm font-bold text-white">Session history</h3></div>
+        {session.events.length === 0 ? <div className="p-6 text-xs text-neutral-500">No session events yet.</div> : <div className="divide-y divide-[#1b150f]">{session.events.map((event) => <div key={event.id} className="p-3 flex items-center justify-between gap-3 text-xs"><div><div className="text-white font-semibold">{event.type}</div><div className="text-neutral-500">{event.timestamp}{event.detail ? ` · ${event.detail}` : ''}</div></div>{event.txHash ? <a className="text-[#e8b56f] hover:underline font-mono" href={`https://testnet.monadscan.com/tx/${event.txHash}`} target="_blank" rel="noreferrer">{event.txHash.slice(0, 10)}... ↗</a> : null}</div>)}</div>}
       </div>
     </div>
   );

@@ -13,15 +13,16 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { StreamManifest, SegmentManifest, computeSegmentLeaf, verifyMerkleProof, verifySegmentIntegrity } from './manifest';
 import { accessService } from './accessClient';
 import { EIP712_TYPES, getStreamPayDomain } from './typedData';
-import { buildContentOffer, signOffer, openSession as openRealSession, signVoucher as signRealVoucher, checkpoint as checkpointReal, signCloseAck, closeSession as closeRealSession, readVoucherDigest } from './realLifecycle';
+import { buildContentOffer, signOffer, openSession as openRealSession, signVoucher as signRealVoucher, checkpoint as checkpointReal, signCloseAck, closeSession as closeRealSession, readVoucherDigest, readClaimable, claimRefund } from './realLifecycle';
 
 export type NetworkType = 'local' | 'testnet';
 export interface WalletState { address: Address | ''; chainId: number; network: NetworkType; isConnected: boolean; balanceUSDC: string; }
 export interface VerificationLog { id: string; segmentIndex: number; timestamp: string; durationUnits: number; byteLength: number; segmentSha256: Hex; computedSha256: Hex; sha256Valid: boolean; leaf: Hex; merkleValid: boolean; proofLength: number; token: string; cumulativeUnits: string; mediaMimeType?: string; mediaData?: Uint8Array; }
+export interface SessionEvent { id: string; type: string; timestamp: string; txHash?: Hex; detail?: string; }
 export interface StreamSessionState {
   sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed'; cumulativeUnits: number; settledUnits: number;
   initialDepositUSDC: string; unredeemedUSDC: string; sessionSigner: Address | ''; payer: Address | ''; recipient: Address | ''; contractAddress: Address | ''; paymentToken: Address | '';
-  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
+  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
 }
 
 export const MONAD_TESTNET_CHAIN_ID = 10143;
@@ -101,7 +102,7 @@ export class ProtocolLifecycleManager {
   private walletClient: ReturnType<typeof createWalletClient> | null = null;
   private listeners: (() => void)[] = [];
   private wallet: WalletState = { address: '', chainId: LOCAL_CHAIN_ID, network: 'local', isConnected: simulationMode, balanceUSDC: '0' };
-  private session: StreamSessionState = { sessionId: null, status: 'inactive', cumulativeUnits: 0, settledUnits: 0, initialDepositUSDC: '0', unredeemedUSDC: '0', sessionSigner: '', payer: '', recipient: '', contractAddress: '', paymentToken: '', openedAt: null, lastTxHash: null, lastVoucherSignature: null, lastCloseAckSignature: null, verificationLogs: [], activeSegmentIndex: null, isSimulated: simulationMode, error: null };
+  private session: StreamSessionState = { sessionId: null, status: 'inactive', cumulativeUnits: 0, settledUnits: 0, initialDepositUSDC: '0', unredeemedUSDC: '0', sessionSigner: '', payer: '', recipient: '', contractAddress: '', paymentToken: '', openedAt: null, lastTxHash: null, lastVoucherSignature: null, lastCloseAckSignature: null, verificationLogs: [], events: [], refundUSDC: '0', refundStatus: 'not-finalized', claimableUSDC: '0', activeSegmentIndex: null, isSimulated: simulationMode, error: null };
   private creatorOffer: { offer: any; signature: Hex } | null = null;
   private creatorAddress: Address | '' = '';
   private payerAddress: Address | '' = '';
@@ -129,13 +130,14 @@ export class ProtocolLifecycleManager {
     try {
       const saved = JSON.parse(raw) as { session?: Partial<StreamSessionState>; creatorAddress?: Address | ''; creatorOffer?: { offer: any; signature: Hex } | null };
       if (saved.session?.status === 'active' || saved.session?.status === 'closed') {
-        this.session = { ...this.session, ...saved.session, verificationLogs: saved.session.verificationLogs || [] } as StreamSessionState;
+        this.session = { ...this.session, ...saved.session, verificationLogs: saved.session.verificationLogs || [], events: saved.session.events || [] } as StreamSessionState;
       }
       this.creatorAddress = saved.creatorAddress || '';
       this.creatorOffer = saved.creatorOffer || null;
     } catch { browserSessionStorage()?.removeItem(sessionStorageKey); }
   }
   private notify() { this.persistState(); this.listeners.forEach((x) => x()); }
+  private addEvent(type: string, txHash?: Hex, detail?: string): void { this.session.events.unshift({ id: `${Date.now()}-${type}`, type, timestamp: new Date().toISOString(), txHash, detail }); }
   getNetwork(): NetworkType { return this.network; }
   getWallet(): WalletState { return { ...this.wallet }; }
   getSession(): StreamSessionState { return { ...this.session, verificationLogs: [...this.session.verificationLogs] }; }
@@ -275,11 +277,11 @@ export class ProtocolLifecycleManager {
         const deposit = BigInt(Math.round(Number(depositUSDC) * 1_000_000));
         const payer = requireAddress(this.wallet.address, 'Payer wallet');
         const result = await openRealSession({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, payer, recipient: this.creatorOffer.offer.recipient, signerAddress: this.signerAccount.address, manifestRoot: manifest.manifestRoot, offer: this.creatorOffer.offer, offerSignature: this.creatorOffer.signature, deposit, chainId: MONAD_TESTNET_CHAIN_ID });
-        this.session.sessionId = result.sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = false; this.session.lastTxHash = result.txHash; this.session.contractAddress = requireAddress(this.session.contractAddress, 'Settlement contract'); this.session.paymentToken = MONAD_PAYMENT_TOKEN; this.session.payer = this.wallet.address; this.session.recipient = this.creatorOffer.offer.recipient; this.session.sessionSigner = this.signerAccount.address; this.notify(); return result.txHash;
+        this.session.sessionId = result.sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = false; this.session.lastTxHash = result.txHash; this.session.refundStatus = 'not-finalized'; this.session.refundUSDC = '0'; this.session.claimableUSDC = '0'; this.session.contractAddress = requireAddress(this.session.contractAddress, 'Settlement contract'); this.session.paymentToken = MONAD_PAYMENT_TOKEN; this.session.payer = this.wallet.address; this.session.recipient = this.creatorOffer.offer.recipient; this.session.sessionSigner = this.signerAccount.address; this.addEvent('Session opened', result.txHash); this.notify(); return result.txHash;
       }
       const now = BigInt(Math.floor(Date.now() / 1000));
       const sessionId = keccak256(encodePacked(['address', 'bytes32', 'uint256'], [this.simulationAccount.address, manifest.manifestRoot, now]));
-      this.session.sessionId = sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = true; this.session.contractAddress = zeroAddress; this.session.paymentToken = ''; this.notify(); return null;
+      this.session.sessionId = sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = true; this.session.contractAddress = zeroAddress; this.session.paymentToken = ''; this.session.refundStatus = 'not-finalized'; this.session.refundUSDC = '0'; this.session.claimableUSDC = '0'; this.addEvent('Session opened', undefined, 'Simulation mode'); this.notify(); return null;
     } catch (err) { this.session.status = 'inactive'; this.session.error = err instanceof Error ? err.message : 'Failed to open session'; this.notify(); throw err; }
   }
 
@@ -323,7 +325,7 @@ export class ProtocolLifecycleManager {
     await this.refreshInjectedWallet(requireAddress(this.session.payer, 'Payer wallet'));
     this.session.status = 'checkpointing'; this.notify();
     const tx = await checkpointReal({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), account: requireAddress(this.wallet.address, 'Payer wallet'), sessionId: this.session.sessionId, cumulativeUnits: BigInt(this.session.cumulativeUnits), voucherSig: this.session.lastVoucherSignature });
-    this.session.lastTxHash = tx; this.session.settledUnits = this.session.cumulativeUnits; this.session.status = 'active'; this.notify(); return tx;
+    this.session.lastTxHash = tx; this.session.settledUnits = this.session.cumulativeUnits; this.addEvent('Checkpoint settled', tx); this.session.status = 'active'; this.notify(); return tx;
   }
 
   async closeSession(): Promise<Hex | null> {
@@ -333,7 +335,25 @@ export class ProtocolLifecycleManager {
     await this.refreshInjectedWallet(requireAddress(this.session.payer, 'Payer wallet'));
     this.session.status = 'closing'; this.notify();
     const tx = await closeRealSession({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), account: requireAddress(this.wallet.address, 'Payer wallet'), sessionId: this.session.sessionId, cumulativeUnits: BigInt(this.session.cumulativeUnits), voucherSig: this.session.lastVoucherSignature, ackSig: this.session.lastCloseAckSignature });
-    this.session.lastTxHash = tx; this.session.status = 'closed'; this.session.settledUnits = this.session.cumulativeUnits; this.notify(); return tx;
+    const deposit = Number(this.session.initialDepositUSDC);
+    const billed = Number(this.session.unredeemedUSDC);
+    this.session.refundUSDC = Math.max(0, deposit - billed).toFixed(6);
+    this.session.refundStatus = 'allocated';
+    this.session.lastTxHash = tx; this.session.status = 'closed'; this.session.settledUnits = this.session.cumulativeUnits; this.addEvent('Session closed / refund allocated', tx, `${this.session.refundUSDC} USDC refund allocation`); this.notify(); return tx;
+  }
+
+  async refreshClaimableRefund(): Promise<string> {
+    if (simulationMode || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) return this.session.claimableUSDC;
+    const amount = await readClaimable({ rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, account: requireAddress(this.wallet.address, 'Wallet') });
+    this.session.claimableUSDC = (Number(amount) / 1_000_000).toFixed(6); if (amount > 0n) this.session.refundStatus = 'claimable'; this.notify(); return this.session.claimableUSDC;
+  }
+
+  async claimRefund(): Promise<Hex | null> {
+    if (simulationMode) { this.session.claimableUSDC = '0'; this.session.refundStatus = 'claimed'; this.notify(); return null; }
+    if (!this.walletClient) throw new Error('Connect the payer wallet before claiming a refund.');
+    await this.refreshInjectedWallet(requireAddress(this.wallet.address, 'Payer wallet'));
+    const tx = await claimRefund({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, account: requireAddress(this.wallet.address, 'Payer wallet') });
+    this.session.claimableUSDC = '0'; this.session.refundStatus = 'claimed'; this.session.lastTxHash = tx; this.addEvent('Claimable refund claimed', tx); this.notify(); return tx;
   }
 
   async signCreatorCloseAuthorization(): Promise<void> {

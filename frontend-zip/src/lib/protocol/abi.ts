@@ -231,7 +231,6 @@ export const SETTLEMENT_ABI = [
     name: 'claim',
     inputs: [
       { name: 'token', type: 'address' },
-      { name: 'recipient', type: 'address' },
     ],
     outputs: [],
     stateMutability: 'nonpayable',
