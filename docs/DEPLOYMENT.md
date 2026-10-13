@@ -27,9 +27,9 @@ https://<render-service>.onrender.com/health
 
 The response must report `chainId: 10143`, `activeMode: "onchain"`, and the deployed settlement address.
 
-## Frontend on Vercel
+## Frontend on Render
 
-Import the same repository and set **Root Directory** to `frontend-zip`, **Framework** to Vite, build command to `npm run build`, and output directory to `dist`.
+The Blueprint also defines `streampay-frontend` as a Render static site. It uses root directory `frontend-zip`, build command `npm ci && npm run build`, and output directory `dist`.
 
 Set:
 
@@ -41,7 +41,7 @@ VITE_MONAD_TESTNET_RPC=https://testnet-rpc.monad.xyz
 VITE_SETTLEMENT_ADDRESS=0x3E016fa87f7149971F65Df413b667C5355c5B060
 ```
 
-After the Vercel URL exists, update Render's `CORS_ORIGIN` to that exact URL and redeploy the Render service.
+The expected frontend URL is `https://streampay-frontend.onrender.com`. If Render assigns a different URL, update the Access Service's `CORS_ORIGIN` to that exact URL and redeploy the backend.
 
 ## Not completed by repository automation
 

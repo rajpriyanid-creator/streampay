@@ -21,6 +21,24 @@ services:
       - key: DATA_STORE_DIR
         value: /tmp/streampay-data
       - key: CORS_ORIGIN
-        sync: false
+        value: https://streampay-frontend.onrender.com
       - key: TOKEN_SECRET
         generateValue: true
+
+  - type: web
+    name: streampay-frontend
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    rootDir: frontend-zip
+    envVars:
+      - key: VITE_NETWORK
+        value: testnet
+      - key: VITE_STREAM_SIMULATION
+        value: "false"
+      - key: VITE_ACCESS_SERVICE_URL
+        value: https://streampay-access-service.onrender.com
+      - key: VITE_MONAD_TESTNET_RPC
+        value: https://testnet-rpc.monad.xyz
+      - key: VITE_SETTLEMENT_ADDRESS
+        value: 0x3E016fa87f7149971F65Df413b667C5355c5B060
