@@ -43,7 +43,7 @@ jobs:
         run: npm ci --prefix access-service
 
       - name: Install Frontend Dependencies
-        run: npm ci --prefix frontend-zip
+        run: npm ci --prefix frontend-zip --legacy-peer-deps || npm install --prefix frontend-zip --legacy-peer-deps
 
       # TypeScript checks
       - name: TypeScript Check Access Service

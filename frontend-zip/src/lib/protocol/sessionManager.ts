@@ -70,7 +70,7 @@ function injectedProvider(): EthereumProvider {
   const root = window.ethereum;
   if (!root) throw new Error('No injected wallet found. Install and unlock MetaMask or Rabby.');
   const providers = root.providers?.length ? root.providers : [root];
-  return providers.find((provider) => provider.isMetaMask && !provider.isRabby) || providers.find((provider) => provider.isRabby) || providers[0];
+  return providers.find((provider: EthereumProvider) => provider.isMetaMask && !provider.isRabby) || providers.find((provider: EthereumProvider) => provider.isRabby) || providers[0];
 }
 
 async function selectedAccount(provider: EthereumProvider, requested?: string[]): Promise<string> {
@@ -119,14 +119,14 @@ export class ProtocolLifecycleManager {
     if (this.network === 'testnet') { this.wallet.network = 'testnet'; this.wallet.chainId = MONAD_TESTNET_CHAIN_ID; this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address; this.session.paymentToken = MONAD_PAYMENT_TOKEN; }
     this.restorePersistedState();
     if (simulationMode) { this.wallet.address = this.simulationAccount.address; this.wallet.isConnected = true; this.session.payer = this.simulationAccount.address; this.session.sessionSigner = this.simulationAccount.address; }
-    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', (accounts) => { void this.syncActiveAccount(Array.isArray(accounts) ? accounts as string[] : []); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
+    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', (accounts: unknown) => { void this.syncActiveAccount(Array.isArray(accounts) ? accounts as string[] : []); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
   }
-  subscribe(cb: () => void): () => void { this.listeners.push(cb); return () => { this.listeners = this.listeners.filter((x) => x !== cb); }; }
+  subscribe(cb: () => void): () => void { this.listeners.push(cb); return () => { this.listeners = this.listeners.filter((x: () => void) => x !== cb); }; }
   private persistState() {
     const storage = browserSessionStorage();
     if (!storage) return;
     try {
-      const verificationLogs = this.session.verificationLogs.map(({ mediaData: _mediaData, ...log }) => log);
+      const verificationLogs = this.session.verificationLogs.map(({ mediaData: _mediaData, ...log }: any) => log);
       storage.setItem(sessionStorageKey, JSON.stringify({ session: { ...this.session, verificationLogs }, creatorAddress: this.creatorAddress, creatorOffer: this.creatorOffer }));
     } catch { /* Browser storage is optional; protocol state remains authoritative. */ }
   }
@@ -142,7 +142,7 @@ export class ProtocolLifecycleManager {
       this.creatorOffer = saved.creatorOffer || null;
     } catch { browserSessionStorage()?.removeItem(sessionStorageKey); }
   }
-  private notify() { this.persistState(); this.listeners.forEach((x) => x()); }
+  private notify() { this.persistState(); this.listeners.forEach((x: () => void) => x()); }
   private addEvent(type: string, txHash?: Hex, detail?: string): void { this.session.events.unshift({ id: `${Date.now()}-${type}`, type, timestamp: new Date().toISOString(), txHash, detail }); }
   getNetwork(): NetworkType { return this.network; }
   getWallet(): WalletState { return { ...this.wallet }; }

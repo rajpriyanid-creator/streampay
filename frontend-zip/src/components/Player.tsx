@@ -269,7 +269,7 @@ export const Player: React.FC<PlayerProps> = ({
 
     if (isPlaying) {
       timer = setInterval(() => {
-        setPlaybackTime((prev) => {
+        setPlaybackTime((prev: number) => {
           const next = prev + 0.25;
           if (next >= totalDuration) {
             setIsPlaying(false);
@@ -435,7 +435,7 @@ export const Player: React.FC<PlayerProps> = ({
         >
           {/* Segment ticks overlay */}
           <div className="absolute inset-0 flex">
-            {manifest.segments.map((_, i) => (
+            {manifest.segments.map((_: unknown, i: number) => (
               <div
                 key={i}
                 className="h-full border-r border-black/50"

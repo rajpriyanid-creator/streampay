@@ -12,8 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@dynamic-labs-sdk/client": "^1.39.1",
-    "@dynamic-labs-sdk/evm": "^1.39.1",
+    "@dynamic-labs-wallet/forward-mpc-client": "^2.0.2",
     "@dynamic-labs/ethereum": "^5.10.0",
     "@dynamic-labs/sdk-react-core": "^5.10.0",
     "@google/genai": "^2.4.0",

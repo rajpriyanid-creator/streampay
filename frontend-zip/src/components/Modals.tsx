@@ -230,7 +230,7 @@ export const ProofInspectorModal: React.FC<ProofInspectorModalProps> = ({
               Merkle Proof Sibling Nodes ({segment.merkleProof.length} levels)
             </span>
             <div className="space-y-1.5">
-              {segment.merkleProof.map((proofHash, i) => (
+              {segment.merkleProof.map((proofHash: string, i: number) => (
                 <div
                   key={i}
                   className="p-2 rounded-lg bg-[#0a0806] border border-[#201912] font-mono text-[10px] text-neutral-300 flex items-center justify-between"
