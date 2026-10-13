@@ -239,4 +239,4 @@ All smart contract logic, architectural designs, security constraints, and deplo
 ---
 
 ## ⚖️ License
-MIT License. Created for the Monad "Metropolis" Hackathon.
+MIT License(https://github.com/rajpriyanid-creator/streampay/blob/main/LICENSE). Created for the Monad "Metropolis" Hackathon.
