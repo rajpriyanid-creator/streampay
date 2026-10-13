@@ -4,10 +4,12 @@ services:
     runtime: node
     plan: free
     rootDir: access-service
-    buildCommand: npm ci --include=dev && npm run build
+    buildCommand: (npm ci --include=dev || npm install --include=dev) && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
+      - key: NODE_VERSION
+        value: 22
       - key: NODE_ENV
         value: production
       - key: NETWORK
@@ -28,10 +30,12 @@ services:
   - type: web
     name: streampay-frontend
     runtime: static
-    buildCommand: npm ci && npm run build
+    buildCommand: (npm ci --legacy-peer-deps || npm install --legacy-peer-deps) && npm run build
     staticPublishPath: ./dist
     rootDir: frontend-zip
     envVars:
+      - key: NODE_VERSION
+        value: 22
       - key: VITE_NETWORK
         value: testnet
       - key: VITE_STREAM_SIMULATION
