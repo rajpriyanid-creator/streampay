@@ -49,6 +49,7 @@ export const Player: React.FC<PlayerProps> = ({
   const [verifyingNotice, setVerifyingNotice] = useState<string | null>(null);
   const [mediaPlaybackError, setMediaPlaybackError] = useState(false);
   const mediaUrlRef = useRef<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,6 +65,12 @@ export const Player: React.FC<PlayerProps> = ({
       if (mediaUrlRef.current === nextUrl) mediaUrlRef.current = null;
     };
   }, [verifiedMedia, verifiedMediaType]);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (isPlaying) void videoRef.current.play().catch(() => {});
+    else videoRef.current.pause();
+  }, [isPlaying, mediaUrl]);
 
   const totalDuration = manifest.totalDurationSec || 10;
   const segmentDuration = totalDuration / manifest.totalSegments;
@@ -362,6 +369,7 @@ export const Player: React.FC<PlayerProps> = ({
       />
       {mediaUrl && (
         <video
+          ref={videoRef}
           key={mediaUrl}
           src={mediaUrl}
           className="absolute inset-0 z-[1] w-full h-full object-cover"

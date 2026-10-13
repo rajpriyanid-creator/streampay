@@ -36,7 +36,7 @@ export const OpenSessionModal: React.FC<OpenSessionModalProps> = ({
   onConfirmOpen,
 }) => {
   const [deposit, setDeposit] = useState(() => {
-    try { return window.sessionStorage.getItem('streampay.deposit.v1') || '0.0500'; } catch { return '0.0500'; }
+    try { return window.localStorage.getItem('streampay.deposit.v1') || '0.0500'; } catch { return '0.0500'; }
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +97,7 @@ export const OpenSessionModal: React.FC<OpenSessionModalProps> = ({
                 value={deposit}
                 onChange={(e) => {
                   setDeposit(e.target.value);
-                  try { window.sessionStorage.setItem('streampay.deposit.v1', e.target.value); } catch { /* optional */ }
+                  try { window.localStorage.setItem('streampay.deposit.v1', e.target.value); } catch { /* optional */ }
                 }}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-[#0a0806] border border-[#261e16] text-white text-sm font-mono focus:border-[#d89a4e] focus:outline-none"
                 required

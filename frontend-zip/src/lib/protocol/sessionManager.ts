@@ -32,7 +32,7 @@ const sessionStorageKey = 'streampay.protocol.session.v1';
 const signerStorageKey = 'streampay.session-signer.v1';
 
 function browserSessionStorage(): Storage | null {
-  try { return typeof window === 'undefined' ? null : window.sessionStorage; } catch { return null; }
+  try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
 }
 
 function getOrCreateSignerKey(): Hex {

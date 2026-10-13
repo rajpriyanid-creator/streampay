@@ -39,13 +39,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'stream' | 'manifest' | 'payments' | 'docs'>('stream');
   const [activeNav, setActiveNav] = useState('overview');
   const [currentStreamId, setCurrentStreamId] = useState(() => {
-    try { return window.sessionStorage.getItem('streampay.current-stream.v1') || 'monad-keynote-hd'; } catch { return 'monad-keynote-hd'; }
+    try { return window.localStorage.getItem('streampay.current-stream.v1') || 'monad-keynote-hd'; } catch { return 'monad-keynote-hd'; }
   });
   const [manifest, setManifest] = useState<StreamManifest | null>(null);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [verifiedMedia, setVerifiedMedia] = useState<Uint8Array | null>(null);
   const [verifiedMediaType, setVerifiedMediaType] = useState('video/mp2t');
+  const [verifiedSegments, setVerifiedSegments] = useState<Record<number, { data: Uint8Array; mimeType: string }>>({});
   const [creatorAddress, setCreatorAddress] = useState('');
   const [creatorState, setCreatorState] = useState(protocolManager.getCreatorState());
 
@@ -98,9 +99,11 @@ export default function App() {
     }
 
     setCurrentStreamId(streamId);
-    try { window.sessionStorage.setItem('streampay.current-stream.v1', streamId); } catch { /* optional */ }
+    try { window.localStorage.setItem('streampay.current-stream.v1', streamId); } catch { /* optional */ }
     setIsPlaying(false);
     setCurrentSegmentIndex(0);
+    setVerifiedSegments({});
+    setVerifiedMedia(null);
     try {
       const m = await accessService.getManifest(streamId);
       setManifest(m);
@@ -120,17 +123,45 @@ export default function App() {
 
       try {
         setCurrentSegmentIndex(segmentIndex);
+        const cached = verifiedSegments[segmentIndex];
+        if (cached) {
+          setVerifiedMedia(cached.data);
+          setVerifiedMediaType(cached.mimeType);
+          setIsPlaying(true);
+          return;
+        }
         const verification = await protocolManager.requestAndVerifySegment(manifest, segmentIndex);
         setVerifiedMedia(verification.mediaData || null);
         setVerifiedMediaType(verification.mediaMimeType || 'video/mp2t');
+        if (verification.mediaData) {
+          setVerifiedSegments((previous) => ({ ...previous, [segmentIndex]: { data: verification.mediaData!, mimeType: verification.mediaMimeType || 'video/mp2t' } }));
+        }
         setIsPlaying(true);
       } catch (err: unknown) {
         console.error('Play segment error:', err);
         alert(err instanceof Error ? err.message : 'Error playing segment');
       }
     },
-    [session.status, manifest]
+    [session.status, manifest, verifiedSegments]
   );
+
+  useEffect(() => {
+    const nextIndex = currentSegmentIndex + 1;
+    if (!manifest || session.status !== 'active' || nextIndex >= manifest.totalSegments || verifiedSegments[nextIndex]) return;
+    let cancelled = false;
+    protocolManager.requestAndVerifySegment(manifest, nextIndex).then((verification) => {
+      if (cancelled || !verification.mediaData) return;
+      setVerifiedSegments((previous) => ({ ...previous, [nextIndex]: { data: verification.mediaData!, mimeType: verification.mediaMimeType || 'video/mp2t' } }));
+    }).catch((error) => console.warn('Segment prefetch failed:', error));
+    return () => { cancelled = true; };
+  }, [currentSegmentIndex, manifest, session.status, verifiedSegments]);
+
+  useEffect(() => {
+    const current = verifiedSegments[currentSegmentIndex];
+    if (!current) return;
+    setVerifiedMedia(current.data);
+    setVerifiedMediaType(current.mimeType);
+  }, [currentSegmentIndex, verifiedSegments]);
 
   // Session actions
   const handleOpenSessionConfirm = async (deposit: string) => {
