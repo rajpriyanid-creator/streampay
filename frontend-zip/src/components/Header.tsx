@@ -91,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-16 w-full px-4 sm:px-6 flex items-center justify-between border-b border-[#1c1813] bg-[#0c0a08]/90 backdrop-blur-md sticky top-0 z-40 select-none">
+    <header className="h-16 w-full px-4 sm:px-6 flex items-center justify-between border-b border-[#1c1813] bg-[#0c0a08]/95 backdrop-blur-md sticky top-0 z-40 select-none shrink-0">
       {/* Left: Brand Logo */}
       <div className="flex items-center gap-3 cursor-pointer shrink-0" onClick={() => setActiveTab('stream')}>
         <div className="relative w-8 h-8 flex items-center justify-center">

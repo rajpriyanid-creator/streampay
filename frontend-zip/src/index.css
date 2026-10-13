@@ -1,10 +1,25 @@
 @import "tailwindcss";
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #0b0a08;
+    color: #e5e5e5;
   }
-  code, pre, .font-mono {
+
+  code,
+  pre,
+  .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
 }
@@ -15,12 +30,12 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0d0b09;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2b2319;
+  background: #271f16;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #473926;
+  background: #473824;
 }

@@ -30,7 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectNav,
 }) => {
   return (
-    <aside className="w-[240px] xl:w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-3.5 sm:p-4 select-none min-h-[calc(100vh-64px)]">
+    <aside className="w-[240px] xl:w-[260px] shrink-0 border-r border-[#1a150f] bg-[#0c0a08] flex flex-col justify-between p-3.5 sm:p-4 select-none h-full overflow-y-auto overflow-x-hidden">
       <div className="space-y-6">
         {/* STREAMS Section */}
             <div>

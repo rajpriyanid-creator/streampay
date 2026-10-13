@@ -76,7 +76,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const isStep5Done = session.status === 'closed';
 
   return (
-    <aside className="w-[280px] xl:w-[310px] shrink-0 border-l border-[#1a150f] bg-[#0c0a08] p-3.5 sm:p-4 flex flex-col gap-3.5 select-none min-h-[calc(100vh-64px)]">
+    <aside className="w-[280px] xl:w-[310px] shrink-0 border-l border-[#1a150f] bg-[#0c0a08] p-3.5 sm:p-4 flex flex-col gap-3.5 select-none h-full overflow-y-auto overflow-x-hidden">
       {/* 1. Wallet & Network Card */}
       <div className="p-4 rounded-2xl bg-[#13100c] border border-[#241d16] shadow-sm space-y-3">
         <div className="flex items-center justify-between">
