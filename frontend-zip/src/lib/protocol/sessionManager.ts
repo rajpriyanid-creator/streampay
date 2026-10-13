@@ -231,7 +231,9 @@ export class ProtocolLifecycleManager {
     this.creatorAddress = creator;
     if (creator.toLowerCase() === this.payerAddress.toLowerCase()) throw new Error('Creator and Payer must be different accounts.');
     if (!manifest.manifestRoot || !manifest.manifestRoot.startsWith('0x')) throw new Error('Manifest root is unavailable.');
-    const offer = buildContentOffer({ recipient: creator, token: MONAD_PAYMENT_TOKEN, manifestRoot: manifest.manifestRoot, contentIdHash: manifest.contentIdHash, pricingPolicyHash: manifest.pricingPolicyHash, unitPrice: BigInt(manifest.unitPrice) });
+    const unitPrice = BigInt(manifest.unitPrice);
+    const maxUnits = BigInt(manifest.totalSegments * 2);
+    const offer = buildContentOffer({ recipient: creator, token: MONAD_PAYMENT_TOKEN, manifestRoot: manifest.manifestRoot, contentIdHash: manifest.contentIdHash, pricingPolicyHash: manifest.pricingPolicyHash, unitPrice, maxCreditSegments: manifest.totalSegments, maxCreditWindowUnits: maxUnits, maxUnredeemedAmount: unitPrice * maxUnits });
     const signature = await signOffer(this.walletClient, requireAddress(this.session.contractAddress, 'Settlement contract'), creator, offer, MONAD_TESTNET_CHAIN_ID);
     this.creatorAddress = creator; this.creatorOffer = { offer, signature }; this.notify();
   }

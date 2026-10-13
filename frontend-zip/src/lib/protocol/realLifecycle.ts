@@ -41,14 +41,14 @@ const tokenAbi = [
 const publicClient = (rpc: string) => createPublicClient({ transport: http(rpc) });
 const domain = (settlement: Address, chainId: number) => getStreamPayDomain(chainId, settlement);
 
-export function buildContentOffer(p: { recipient: Address; token: Address; manifestRoot: Hex; unitPrice: bigint; contentIdHash?: Hex; pricingPolicyHash?: Hex; now?: bigint }) {
+export function buildContentOffer(p: { recipient: Address; token: Address; manifestRoot: Hex; unitPrice: bigint; contentIdHash?: Hex; pricingPolicyHash?: Hex; maxCreditSegments?: number; maxCreditWindowUnits?: bigint; maxUnredeemedAmount?: bigint; now?: bigint }) {
   const now = p.now ?? BigInt(Math.floor(Date.now() / 1000));
   return {
     recipient: p.recipient, token: p.token,
     contentIdHash: p.contentIdHash || keccak256(new TextEncoder().encode('stream-content-monad-keynote-hd')),
     pricingPolicyHash: p.pricingPolicyHash || '0x76422f1e290b9f7982658421843336df3a5b54190454061ecfa6748f5987c500' as Hex,
     unitPrice: p.unitPrice, maxBillableUnits: 3600n, manifestRoot: p.manifestRoot,
-    maxCreditSegments: 3, maxCreditWindowUnits: 10n, maxUnredeemedAmount: p.unitPrice * 10n,
+    maxCreditSegments: p.maxCreditSegments ?? 3, maxCreditWindowUnits: p.maxCreditWindowUnits ?? 10n, maxUnredeemedAmount: p.maxUnredeemedAmount ?? p.unitPrice * 10n,
     offerNonce: now, issuedAt: now, expiresAt: now + 86400n,
   };
 }
