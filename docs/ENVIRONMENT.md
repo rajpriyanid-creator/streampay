@@ -36,6 +36,7 @@ This document provides a comprehensive reference for all configuration options a
 | `VITE_STREAM_SIMULATION` | Boolean | `false` | Enable demo off-chain simulation mode without wallet connection. |
 | `VITE_MONAD_TESTNET_RPC` | String | `https://testnet-rpc.monad.xyz` | Default RPC endpoint for Monad Testnet (Chain ID 10143). |
 | `VITE_LOCAL_RPC` | String | `http://127.0.0.1:8545` | Default RPC endpoint for local Anvil development node. |
+| `VITE_SETTLEMENT_ADDRESS` | Hex Address | *(from testnet manifest)* | Deployed `StreamPaySettlement` address used by the testnet wallet flow. |
 
 ---
 

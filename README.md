@@ -17,6 +17,26 @@
 - Live demo: coming (link added before deadline)
 - **Audit Status:** *Testnet only, not audited.* See [Known Limitations](docs/KNOWN_LIMITATIONS.md).
 
+## 🌐 Public Deployment
+
+The active web app is the Vite application in `frontend-zip/`; the retired Next.js `frontend/` directory is not the deployment target. For Vercel, import this repository and set **Root Directory** to `frontend-zip`, **Framework Preset** to Vite, **Build Command** to `npm run build`, and **Output Directory** to `dist`.
+
+Required Vercel variables:
+
+```text
+VITE_NETWORK=testnet
+VITE_STREAM_SIMULATION=false
+VITE_MONAD_TESTNET_RPC=https://testnet-rpc.monad.xyz
+VITE_SETTLEMENT_ADDRESS=0x3E016fa87f7149971F65Df413b667C5355c5B060
+VITE_ACCESS_SERVICE_URL=https://<public-access-service-host>
+```
+
+The Access Service is a separate Node/Express process and must be hosted at a public HTTPS URL; Vercel hosts the static frontend only. Set its `CORS_ORIGIN` to the deployed Vercel origin and configure `NETWORK=monad-testnet`, `RPC_URL`, and `SETTLEMENT_ADDRESS`. Do not enable simulation mode for the live deployment.
+
+## AI Disclosure
+
+Codex was used as an engineering assistant for code inspection, implementation support, test execution, documentation edits, and debugging. The project author reviewed the changes, supplied deployment credentials privately, and remains responsible for the submitted code and claims.
+
 ---
 
 ## ⚡ Why Monad?
