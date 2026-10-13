@@ -14,11 +14,10 @@
     "expectedDecimals": 6,
     "source": "Circle official announcement"
   },
-  "settlementContract": null,
-  "deploymentTxHash": null,
-  "deploymentBlock": null,
+  "settlementContract": "0x3e016fa87f7149971f65df413b667c5355c5b060",
+  "deploymentTxHash": "0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d",
+  "deploymentBlock": 70464119,
   "abiVersion": "streampay-v2.5",
   "eip712Name": "StreamPaySettlement",
   "eip712Version": "2.5"
 }
-

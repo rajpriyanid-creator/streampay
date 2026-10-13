@@ -27,15 +27,15 @@ This document provides a comprehensive reference for all configuration options a
 
 ---
 
-## 2. Frontend (`frontend/.env.local`)
+## 2. Frontend (`frontend-zip/.env.local`)
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `NEXT_PUBLIC_NETWORK` | String | `local` | Initial network mode displayed in dashboard: `local` or `testnet`. |
-| `NEXT_PUBLIC_ACCESS_SERVICE_URL` | String | `http://localhost:4001` | URL of the backend Access Service gateway. |
-| `NEXT_PUBLIC_STREAM_SIMULATION` | Boolean | `false` | Enable demo off-chain simulation mode without wallet connection. |
-| `NEXT_PUBLIC_MONAD_TESTNET_RPC` | String | `https://testnet-rpc.monad.xyz` | Default RPC endpoint for Monad Testnet (Chain ID 10143). |
-| `NEXT_PUBLIC_LOCAL_RPC` | String | `http://127.0.0.1:8545` | Default RPC endpoint for local Anvil development node. |
+| `VITE_NETWORK` | String | `local` | Initial network mode displayed in dashboard: `local` or `testnet`. |
+| `VITE_ACCESS_SERVICE_URL` | String | `http://localhost:4001` | URL of the backend Access Service gateway. |
+| `VITE_STREAM_SIMULATION` | Boolean | `false` | Enable demo off-chain simulation mode without wallet connection. |
+| `VITE_MONAD_TESTNET_RPC` | String | `https://testnet-rpc.monad.xyz` | Default RPC endpoint for Monad Testnet (Chain ID 10143). |
+| `VITE_LOCAL_RPC` | String | `http://127.0.0.1:8545` | Default RPC endpoint for local Anvil development node. |
 
 ---
 

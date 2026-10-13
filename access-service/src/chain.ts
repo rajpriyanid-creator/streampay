@@ -83,7 +83,7 @@ export async function initChain(): Promise<number> {
   chainId = await publicClient.getChainId();
 
   if (!isLocal) {
-    const expectedChain = config.NETWORK === 'testnet' ? 10143 : 143;
+    const expectedChain = config.NETWORK === 'testnet' || config.NETWORK === 'monad-testnet' ? 10143 : 143;
     if (chainId !== expectedChain) {
       throw new Error(`CRITICAL: Chain ID mismatch for ${config.NETWORK}. Expected ${expectedChain}, got ${chainId}`);
     }

@@ -12,7 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { type Hex } from 'viem';
-import { createStreamPayFragmentLoader } from '../../frontend/lib/hls/StreamPayFragmentLoader';
+import { createStreamPayFragmentLoader } from '../legacy-frontend-lib/lib/hls/StreamPayFragmentLoader';
 
 async function main() {
   console.log('\n🛡️  Starting StreamPay Fragment Loader Injected Corruption Test Suite...\n');

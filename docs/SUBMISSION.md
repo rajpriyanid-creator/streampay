@@ -29,15 +29,15 @@ Traditional blockchains cannot support real-time video streaming payments:
 ## 4. Monad Testnet Deployment Information
 - **Network:** Monad Testnet (Chain ID `10143`)
 - **RPC URL:** `https://testnet-rpc.monad.xyz`
-- **Settlement Contract:** Pending authorized testnet deployment; `manifests/testnet.json` currently contains `null`.
-- **Explorer Link:** Pending verified deployment.
+- **Settlement Contract:** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060), deployed in block `70464119`.
+- **Deployment transaction:** [`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`](https://testnet.monadscan.com/tx/0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d).
 - **Payment Token:** `0x534b2f3A21130d7a60830c2Df862319e593943A3` (Official Monad Testnet USDC, 6 decimals)
 
 ## 5. Verification & Test Evidence
 - **Smart Contracts:** 47 Foundry unit and fuzz tests passed (`StreamPaySettlementTest`, `DeployTest`, `DeployDiscoveryTest`).
 - **Reservation Ledger:** 13/13 Node.js unit tests passed with concurrency and memory-leak isolation.
 - **E2E HTTP Suite:** 26/26 endpoint, gating, rate-limiting, and error tests passed.
-- **Full Lifecycle Test:** Local lifecycle coverage is present; live testnet lifecycle evidence is pending deployment.
+- **Full Lifecycle Test:** Local lifecycle coverage is present; live testnet lifecycle evidence remains pending the smoke run.
 - **Security Tests:** 11 testnet signing safety tests proving zero Anvil key leakage into testnet paths and strict EIP-712 domain separation.
 - **Failure Demo:** Automated script proving byte tampering and forged Merkle proofs are rejected on client (`scripts/failure-demo.ts`).
 

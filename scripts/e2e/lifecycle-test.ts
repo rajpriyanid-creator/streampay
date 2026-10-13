@@ -6,7 +6,7 @@
  * Usage: npx tsx scripts/e2e/lifecycle-test.ts
  * Prereqs: Anvil running on 127.0.0.1:8545 with deployed contract and token
  */
-import { openSession, signVoucher, checkpoint, closeCooperative } from '../../frontend/lib/protocol/lifecycle';
+import { openSession, signVoucher, checkpoint, closeCooperative } from '../legacy-frontend-lib/lib/protocol/lifecycle';
 import { keccak256, type Hex, type Address, createPublicClient, http } from 'viem';
 
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545';

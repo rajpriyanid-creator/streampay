@@ -40,9 +40,9 @@ import {
   checkpointWithWallet,
   closeCooperativeWithWallet,
   buildContentOffer,
-} from '../../frontend/lib/protocol/lifecycle';
-import { verifySettlementContract } from '../../frontend/lib/protocol/contractClient';
-import { CANONICAL_PRICING_POLICY_HASH } from '../../frontend/lib/protocol/typedData';
+} from '../legacy-frontend-lib/lib/protocol/lifecycle';
+import { verifySettlementContract } from '../legacy-frontend-lib/lib/protocol/contractClient';
+import { CANONICAL_PRICING_POLICY_HASH } from '../legacy-frontend-lib/lib/protocol/typedData';
 
 const TESTNET_CHAIN_ID = 10143;
 const LOCAL_CHAIN_ID = 31337;
@@ -602,39 +602,23 @@ async function runTests() {
   // Test 9: Static audit - verify zero Anvil keys leak into Testnet in frontend code
   console.log('\nTest 9: Static audit of frontend code for forbidden Anvil keys in testnet paths...');
   {
-    const pageTsx = fs.readFileSync(
-      path.join(__dirname, '../../frontend/app/page.tsx'),
+    const appTsx = fs.readFileSync(
+      path.join(__dirname, '../../frontend-zip/src/App.tsx'),
+      'utf8'
+    );
+    const sessionManagerTs = fs.readFileSync(
+      path.join(__dirname, '../../frontend-zip/src/lib/protocol/sessionManager.ts'),
       'utf8'
     );
     const lifecycleTs = fs.readFileSync(
-      path.join(__dirname, '../../frontend/lib/protocol/lifecycle.ts'),
+      path.join(__dirname, '../../scripts/legacy-frontend-lib/lib/protocol/lifecycle.ts'),
       'utf8'
     );
 
     // Helper to extract the specific TESTNET branch inside each function
-    function getTestnetBranch(fnName: string): string {
-      const fnIdx = pageTsx.indexOf(fnName);
-      assert(fnIdx !== -1, `${fnName} not found`);
-      const fnBody = pageTsx.slice(fnIdx, fnIdx + 3000);
-      const testnetIdx = fnBody.indexOf("networkMode === 'TESTNET'");
-      assert(testnetIdx !== -1, `networkMode === 'TESTNET' not found in ${fnName}`);
-      const branchBody = fnBody.slice(testnetIdx);
-      const endMatch = branchBody.search(/else if \(isDeployed\)|else \{/);
-      const endIdx = endMatch !== -1 ? endMatch : branchBody.indexOf('return;');
-      return branchBody.slice(0, endIdx);
-    }
-
-    const connectWalletTestnet = getTestnetBranch('handleConnectWallet');
-    assert(!connectWalletTestnet.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in handleConnectWallet TESTNET branch');
-
-    const openSessionTestnet = getTestnetBranch('handleOpenSession');
-    assert(!openSessionTestnet.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in handleOpenSession TESTNET branch');
-
-    const checkpointTestnet = getTestnetBranch('handleCheckpointOnChain');
-    assert(!checkpointTestnet.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in handleCheckpointOnChain TESTNET branch');
-
-    const closeSessionTestnet = getTestnetBranch('handleCloseSession');
-    assert(!closeSessionTestnet.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in handleCloseSession TESTNET branch');
+    assert(!appTsx.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in active frontend code');
+    assert(!sessionManagerTs.includes('ANVIL_ACCOUNTS'), 'ANVIL_ACCOUNTS must not appear in active session manager');
+    assert(sessionManagerTs.includes('MONAD_TESTNET_CHAIN_ID'), 'Active session manager must enforce Monad testnet chain ID');
 
     // Verify lifecycle.ts explicitly throws on non-local chain when creatorKey is passed
     assert(
@@ -642,13 +626,13 @@ async function runTests() {
       'lifecycle.ts must enforce creatorKey ban on non-local chains'
     );
 
-    // Verify testnet.json manifest remains un-deployed (settlementContract: null)
+    // Verify the checked-in manifest points at the real deployment.
     const testnetManifest = JSON.parse(
       fs.readFileSync(path.join(__dirname, '../../manifests/testnet.json'), 'utf8')
     );
     assert(
-      testnetManifest.settlementContract === null,
-      'Testnet manifest settlementContract must remain null until real deployment'
+      testnetManifest.settlementContract === '0x3e016fa87f7149971f65df413b667c5355c5b060',
+      'Testnet manifest must contain the verified deployed settlement address'
     );
 
     console.log('   ✅ PASS: Zero Anvil keys in Testnet execution paths in frontend.');

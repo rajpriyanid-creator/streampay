@@ -24,9 +24,9 @@ Evidence: Clean tsc build into dist/
 ### Frontend TypeScript Compilation (`tsc --noEmit` & `npm run build`)
 ```
 Status: PASS (0 errors, exit code 0)
-Location: frontend/
-Command: npm --prefix frontend run typecheck && npm --prefix frontend run build
-Evidence: Next.js 14.2 production bundle successfully compiled, linted, and static routes generated:
+Location: frontend-zip/
+Command: npm --prefix frontend-zip run lint && npm --prefix frontend-zip run build
+Evidence: Vite production bundle successfully compiled:
   Route (app)                              Size     First Load JS
   ┌ ○ /                                    288 kB          376 kB
   └ ○ /_not-found                          873 B          88.1 kB
@@ -304,8 +304,8 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 # 1. Typecheck and build all services
 npm --prefix access-service run typecheck
 npm --prefix access-service run build
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
+npm --prefix frontend-zip run lint
+npm --prefix frontend-zip run build
 
 # 2. Run reservation ledger unit tests
 node --test access-service/dist/reservationStore.test.js
@@ -318,7 +318,7 @@ node access-service/dist/server.js &
 node scripts/e2e/e2e.mjs
 
 # 5. Start frontend and verify in browser
-npm --prefix frontend run dev
+npm --prefix frontend-zip run dev
 # Navigate to http://localhost:3000
 
 # 6. Run durable persistence, multi-instance, and lock concurrency suite

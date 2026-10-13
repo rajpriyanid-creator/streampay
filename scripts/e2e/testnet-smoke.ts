@@ -41,8 +41,8 @@ import {
   signVoucher,
   checkpoint,
   closeCooperative,
-} from '../../frontend/lib/protocol/lifecycle';
-import { CANONICAL_PRICING_POLICY_HASH } from '../../frontend/lib/protocol/typedData';
+} from '../legacy-frontend-lib/lib/protocol/lifecycle';
+import { CANONICAL_PRICING_POLICY_HASH } from '../legacy-frontend-lib/lib/protocol/typedData';
 
 const MONAD_TESTNET_CHAIN_ID = 10143;
 const RPC_URL = process.env.RPC_URL || 'https://testnet-rpc.monad.xyz';

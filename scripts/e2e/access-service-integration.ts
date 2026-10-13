@@ -18,7 +18,7 @@
  * 14. Cooperatively close session on-chain and refund excess escrow
  */
 
-import { openSession, signVoucher, checkpoint, closeCooperative } from '../../frontend/lib/protocol/lifecycle';
+import { openSession, signVoucher, checkpoint, closeCooperative } from '../legacy-frontend-lib/lib/protocol/lifecycle';
 import { readSession } from '../../access-service/src/chain';
 import {
   createPublicClient,

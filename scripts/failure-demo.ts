@@ -15,8 +15,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { type Hex } from 'viem';
-import { createStreamPayFragmentLoader } from '../frontend/lib/hls/StreamPayFragmentLoader';
-import { computeSegmentLeaf, verifyMerkleProof } from '../frontend/lib/protocol/manifest';
+import { createStreamPayFragmentLoader } from './legacy-frontend-lib/lib/hls/StreamPayFragmentLoader';
+import { computeSegmentLeaf, verifyMerkleProof } from './legacy-frontend-lib/lib/protocol/manifest';
 
 function sha256Hex(buf: Buffer): Hex {
   return `0x${crypto.createHash('sha256').update(buf).digest('hex')}` as Hex;

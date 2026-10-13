@@ -8,7 +8,7 @@ import { getAddress, isAddress, type Hex } from 'viem';
  */
 export function readManifestSettlement(): string | undefined {
   try {
-    const net = process.env.NETWORK || 'local';
+    const net = process.env.NETWORK === 'monad-testnet' ? 'testnet' : (process.env.NETWORK || 'local');
     const p = path.join(__dirname, '../../manifests', `${net}.json`);
     if (fs.existsSync(p)) {
       return JSON.parse(fs.readFileSync(p, 'utf8')).settlementContract || undefined;
@@ -21,7 +21,7 @@ export function readManifestSettlement(): string | undefined {
 
 export function readManifestPaymentToken(): { address?: Hex; expectedDecimals?: number } | undefined {
   try {
-    const net = process.env.NETWORK || 'local';
+    const net = process.env.NETWORK === 'monad-testnet' ? 'testnet' : (process.env.NETWORK || 'local');
     const p = path.join(__dirname, '../../manifests', `${net}.json`);
     if (fs.existsSync(p)) {
       const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));

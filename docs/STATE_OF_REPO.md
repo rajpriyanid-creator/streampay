@@ -9,16 +9,19 @@
 
 ## Current security-remediation branch
 
-The active branch is `fix/testnet-signing-deployment-safety`, currently at
-commit `58eb0a5`. It contains the security remediation work and the CI/test
-documentation updates made after the historical baseline above. The testnet
-manifest remains intentionally undeployed.
+The active branch is `fix/testnet-signing-deployment-safety`. It contains the
+security remediation work and CI/test documentation updates made after the
+historical baseline above. The settlement is now deployed on Monad Testnet at
+`0x3E016fa87f7149971F65Df413b667C5355c5B060` in block `70464119`; the
+deployment transaction is
+`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`.
+Live lifecycle smoke evidence remains pending.
 
 ## 1. Initial Findings & Code Search Inventory
 
-1. **Fake Transaction Hashes Found in Frontend (`frontend/app/page.tsx`)**:
+1. **Historical fake transaction hashes in the retired frontend**:
    - Lines 265, 399, 433 previously used `keccak256(Buffer.from('tx-...'))` for `txHash`.
-   - **Resolution Target**: Replace with real `viem` transaction client calls and receipt tracking via `frontend/lib/protocol/lifecycle.ts`.
+   - The obsolete Next.js `frontend/` app has been removed; the active app is `frontend-zip/`.
 
 2. **EIP-712 Digest Derivation**:
    - `contractClient.ts` contained raw `encodeAbiParameters` without TYPEHASH / `_hashTypedDataV4` domain wrapping.
@@ -46,6 +49,6 @@ manifest remains intentionally undeployed.
 | **Smart Contract** | `contracts/src/StreamPaySettlement.sol` | Verified EIP-712 & bounded-credit logic |
 | **Contract Tests** | `contracts/test/StreamPaySettlement.t.sol` | 20+ test scenarios for open/checkpoint/close/claim/attack |
 | **Access Service** | `access-service/src/server.ts` | Refactored modular service with token/chain/manifest/voucher modules |
-| **Frontend App** | `frontend/app/page.tsx` | Next.js 14 dashboard using `AccountProvider` & `lifecycle.ts` |
-| **HLS Loader** | `frontend/lib/hls/StreamPayFragmentLoader.ts` | Custom HLS.js loader with integrity check & access gate |
+| **Frontend App** | `frontend-zip/src/App.tsx` | Vite dashboard using injected-wallet session management |
+| **HLS Loader** | `scripts/legacy-frontend-lib/lib/hls/StreamPayFragmentLoader.ts` | Shared integrity-check loader used by corruption tests |
 | **E2E Test Suite** | `scripts/e2e/e2e.mjs` | Automated HTTP test suite for access service endpoints |

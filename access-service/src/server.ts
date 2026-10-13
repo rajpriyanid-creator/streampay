@@ -580,13 +580,22 @@ app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Respons
       contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/segment_${idx}.ts?token=${encodeURIComponent(segmentToken)}`,
     });
   } catch (err: any) {
-    console.error('Error processing gated segment request:', err);
-    res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err.message });
+    const requestId = (req as any).id || 'unknown';
+    logStructured('error', 'Error processing gated segment request', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err?.message || String(err), requestId });
   }
 });
 
 // ─── Gated Content Segment Delivery Route with Token Validation ────
 app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req: Request, res: Response) => {
+  const requestId = (req as any).id || 'unknown';
+  try {
   const { streamId, segmentFile } = req.params;
   const { token } = req.query;
 
@@ -658,6 +667,20 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
   res.setHeader('Cache-Control', 'no-store, private');
   res.setHeader('Content-Length', segmentData.length.toString());
   res.send(segmentData);
+  } catch (err: any) {
+    logStructured('error', 'Error delivering gated segment', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    if (!res.headersSent) {
+      res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err?.message || String(err), requestId });
+    } else {
+      res.destroy(err);
+    }
+  }
 });
 
 // ─── Checkpoint Notification / Sync Route ─────────────────────────

@@ -10,8 +10,8 @@
 > **One-Line Pitch:** StreamPay is a sub-cent, pay-per-second media streaming protocol built on Monad, combining off-chain EIP-712 micro-vouchers with SHA-256 Merkle proofs for zero-trust content verification and instant micro-settlement.
 
 - **Hackathon Track:** `02 Consumer Products & Payments` (Monad "Metropolis" Hackathon)
-- **Live Contract:** Pending an authorized testnet deployment; no address is claimed until `manifests/testnet.json` is populated.
-- **Explorer Link:** Pending verified deployment.
+- **Live Contract:** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060) on Monad Testnet.
+- **Deployment transaction:** [`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`](https://testnet.monadscan.com/tx/0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d), block `70464119`.
 - **Payment Token:** [`0x534b2f3A21130d7a60830c2Df862319e593943A3`](https://testnet.monadvision.com/address/0x534b2f3A21130d7a60830c2Df862319e593943A3) (Official Monad Testnet USDC)
 - Demo video: coming (link added before deadline)
 - Live demo: coming (link added before deadline)
@@ -58,7 +58,7 @@ Traditional streaming platforms force consumers to pay recurring flat fees regar
 
 | Hackathon Criterion | How StreamPay Proves It | File / Evidence Link |
 | :--- | :--- | :--- |
-| **1. Product Usability & UX** | Instant playback, zero-gas streaming, automatic escrow refund on pause, and offline simulation mode. | [`frontend/app/page.tsx`](frontend/app/page.tsx)<br>[`frontend/lib/hls/StreamPayFragmentLoader.ts`](frontend/lib/hls/StreamPayFragmentLoader.ts) |
+| **1. Product Usability & UX** | Instant playback, zero-gas streaming, automatic escrow refund on pause, and offline simulation mode. | [`frontend-zip/src/App.tsx`](frontend-zip/src/App.tsx)<br>[`scripts/legacy-frontend-lib/lib/hls/StreamPayFragmentLoader.ts`](scripts/legacy-frontend-lib/lib/hls/StreamPayFragmentLoader.ts) |
 | **2. Technical Architecture** | Bounded escrow smart contracts, EIP-712 typed vouchers, and SHA-256 + Merkle leaf verification before billing. | [`contracts/src/StreamPaySettlement.sol`](contracts/src/StreamPaySettlement.sol)<br>[`access-service/src/server.ts`](access-service/src/server.ts) |
 | **3. Monad Native Alignment** | Monad-specific deployment validation, official token allowlisting, and documented architecture references. | [`contracts/script/Deploy.s.sol`](contracts/script/Deploy.s.sol)<br>[`manifests/testnet.json`](manifests/testnet.json)<br>[Monad documentation](https://docs.monad.xyz) |
 | **4. Security & Hygiene** | Single-use access tokens, fail-closed token gating, Gitleaks CI secret scanning, and Anvil key isolation. | [`.github/workflows/ci.yml`](.github/workflows/ci.yml)<br>[`scripts/e2e/testnet-signing-safety.test.ts`](scripts/e2e/testnet-signing-safety.test.ts) |

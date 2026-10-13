@@ -43,7 +43,7 @@ jobs:
         run: npm ci --prefix access-service
 
       - name: Install Frontend Dependencies
-        run: npm ci --prefix frontend
+        run: npm ci --prefix frontend-zip
 
       # TypeScript checks
       - name: TypeScript Check Access Service
@@ -53,7 +53,7 @@ jobs:
 
       - name: TypeScript Check Frontend
         run: |
-          cd frontend
+          cd frontend-zip
           npx tsc --noEmit
 
       # Production builds
@@ -61,11 +61,11 @@ jobs:
         run: npm run build --prefix access-service
 
       - name: Build Frontend (Production)
-        run: npm run build --prefix frontend
+        run: npm run build --prefix frontend-zip
 
       # Unit Tests
-      - name: Run Frontend AccountProvider Unit Tests
-        run: npm test --prefix frontend
+      - name: Run Frontend Protocol Unit Tests
+        run: npm test --prefix frontend-zip
 
       # Generate canonical manifest
       - name: Generate Canonical Merkle Manifest
@@ -187,26 +187,15 @@ jobs:
           echo "Running Failure Demo Script..."
           npx tsx scripts/failure-demo.ts
 
-      # Playwright Simulation Mode Smoke Test
-      - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
-        working-directory: frontend
-
-      - name: Run Playwright Simulation Smoke Test
+      # Active frontend smoke check
+      - name: Run Vite Frontend Smoke Check
         run: |
-          PORT=3000 npm run start --prefix frontend &
+          npm run dev --prefix frontend-zip -- --host 127.0.0.1 --port 3000 > /tmp/frontend.log 2>&1 &
           FE_PID=$!
           sleep 5
-          PLAYWRIGHT_TEST_BASE_URL=http://localhost:3000 npm run test:e2e --prefix frontend
+          curl --fail --silent --show-error http://127.0.0.1:3000/ > /tmp/frontend.html
+          grep -q "StreamPay" /tmp/frontend.html
           kill $FE_PID || true
-
-      - name: Upload Playwright Screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-screenshots
-          path: frontend/screenshots/
-          retention-days: 7
 
       # Upload test artifacts
       - name: Upload Test Results
