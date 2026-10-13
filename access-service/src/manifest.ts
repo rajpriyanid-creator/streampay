@@ -155,7 +155,8 @@ export function createCanonicalManifest(streamId: string) {
   let segmentCount = 5;
   if (mediaDir) {
     const files = fs.readdirSync(mediaDir).filter(f => /^segment_\d+\.(?:ts|mp4)$/i.test(f));
-    if (files.length > 0) segmentCount = files.length;
+    const segmentIndexes = new Set(files.map((file) => Number(file.match(/^segment_(\d+)\./i)?.[1])).filter(Number.isInteger));
+    if (segmentIndexes.size > 0) segmentCount = segmentIndexes.size;
   }
 
   const rawSegments = [];
