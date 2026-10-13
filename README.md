@@ -229,6 +229,7 @@ All smart contract logic, architectural designs, security constraints, and deplo
 
 - [`docs/HACKATHON.md`](docs/HACKATHON.md) — Comprehensive Metropolis Hackathon dossier, track alignment, and rubric self-assessment.
 - [`docs/SUBMISSION.md`](docs/SUBMISSION.md) — Copy-paste hackathon submission text and form answers.
+- [`docs/VIDEO_RECORDING_SCRIPTS.md`](docs/VIDEO_RECORDING_SCRIPTS.md) — 3-Minute Demo & 2-Minute Pitch video recording scripts with Sarvam AI voiceover.
 - [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) — 3-minute video presentation script with exact timestamps.
 - [`docs/TESTNET_EVIDENCE.md`](docs/TESTNET_EVIDENCE.md) — Real on-chain transaction hashes, block numbers, and negative security outputs.
 - [`docs/SECURITY.md`](docs/SECURITY.md) — Threat model, race-safe locking, and defense-in-depth architecture.

@@ -24,8 +24,8 @@
 - **Live Access Service API:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health)
 - **Deployed Settlement Contract (MonadScan):** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060)
 - **Deployment Transaction Hash:** [`0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d`](https://testnet.monadscan.com/tx/0x33280abd8579542ac957108bbebfa48e87000376b6006cc820e0d72704bdf22d), Block `70464119`
-- **Official Payment Token:** [`0x534b2f3A21130d7a60830c2Df862319e593943A3`](https://testnet.monadvision.com/address/0x534b2f3A21130d7a60830c2Df862319e593943A3) (Official Monad Testnet USDC, 6 decimals)
-- **Demo Video (3 Minutes):** (Insert public YouTube/Loom URL following `docs/DEMO_SCRIPT.md`)
+- **Demo Video Link (Up to 3 Minutes):** `https://...` (Full script & second-by-second screen recording directions in [`docs/VIDEO_RECORDING_SCRIPTS.md`](./VIDEO_RECORDING_SCRIPTS.md))
+- **Pitch Video Link (Up to 2 Minutes):** `https://...` (Full script, visual directions & Sarvam AI voiceover in [`docs/VIDEO_RECORDING_SCRIPTS.md`](./VIDEO_RECORDING_SCRIPTS.md))
 
 ---
 
