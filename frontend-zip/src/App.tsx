@@ -39,7 +39,15 @@ export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
 
   // App Navigation & UI State
-  const [activeNav, setActiveNav] = useState<'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs'>('overview');
+  const [activeNav, setActiveNav] = useState<'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs'>(() => {
+    try {
+      const saved = window.localStorage.getItem('streampay.active-nav.v1');
+      if (saved && ['overview', 'segments', 'manifest', 'payments', 'session', 'settings', 'docs'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'overview';
+  });
   const computedActiveTab: 'stream' | 'manifest' | 'payments' | 'docs' =
     activeNav === 'manifest' ? 'manifest' :
     activeNav === 'payments' || activeNav === 'session' ? 'payments' :
@@ -48,14 +56,39 @@ export default function App() {
     try { return window.localStorage.getItem('streampay.current-stream.v1') || 'monad-keynote-hd'; } catch { return 'monad-keynote-hd'; }
   });
   const [manifest, setManifest] = useState<StreamManifest | null>(null);
-  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(0);
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number>(() => {
+    try {
+      const sess = protocolManager.getSession();
+      if (sess.activeSegmentIndex !== null && sess.activeSegmentIndex !== undefined && sess.activeSegmentIndex >= 0) {
+        return sess.activeSegmentIndex;
+      }
+      const saved = window.localStorage.getItem('streampay.current-segment.v1');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!Number.isNaN(parsed) && parsed >= 0) return parsed;
+      }
+    } catch {}
+    return 0;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [verifiedMedia, setVerifiedMedia] = useState<Uint8Array | null>(null);
   const [verifiedMediaType, setVerifiedMediaType] = useState('video/mp2t');
   const [verifiedSegments, setVerifiedSegments] = useState<Record<number, { data: Uint8Array; mimeType: string }>>({});
   const inFlightSegments = useRef(new Map<number, Promise<VerificationLog>>());
-  const [creatorAddress, setCreatorAddress] = useState('');
+  const [creatorAddress, setCreatorAddress] = useState(() => {
+    return protocolManager.getCreatorState().address || '';
+  });
   const [creatorState, setCreatorState] = useState(protocolManager.getCreatorState());
+
+  const updateSegmentIndex = useCallback((index: number) => {
+    setCurrentSegmentIndex(index);
+    try { window.localStorage.setItem('streampay.current-segment.v1', String(index)); } catch {}
+  }, []);
+
+  const updateNav = useCallback((target: 'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs') => {
+    setActiveNav(target);
+    try { window.localStorage.setItem('streampay.active-nav.v1', target); } catch {}
+  }, []);
 
   // Modals
   const [isOpenSessionModal, setIsOpenSessionModal] = useState(false);
@@ -108,7 +141,7 @@ export default function App() {
     setCurrentStreamId(streamId);
     try { window.localStorage.setItem('streampay.current-stream.v1', streamId); } catch { /* optional */ }
     setIsPlaying(false);
-    setCurrentSegmentIndex(0);
+    updateSegmentIndex(0);
     setVerifiedSegments({});
     setVerifiedMedia(null);
     try {
@@ -118,7 +151,7 @@ export default function App() {
       setManifest(null);
       console.error('Manifest request failed:', err);
     }
-  }, []);
+  }, [updateSegmentIndex]);
 
   const loadVerifiedSegment = useCallback(async (segmentIndex: number): Promise<VerificationLog> => {
     if (!manifest) throw new Error('Stream manifest is unavailable.');
@@ -143,7 +176,7 @@ export default function App() {
   const handlePlaySegment = useCallback(async (segmentIndex: number) => {
     if (!manifest || session.status !== 'active') { setIsOpenSessionModal(true); return; }
     try {
-      setCurrentSegmentIndex(segmentIndex);
+      updateSegmentIndex(segmentIndex);
       const verification = await loadVerifiedSegment(segmentIndex);
       setVerifiedMedia(verification.mediaData || null);
       setVerifiedMediaType(verification.mediaMimeType || 'video/mp2t');
@@ -231,14 +264,14 @@ export default function App() {
 
   // Switch navigation tabs smoothly
   const handleNavClick = (nav: string) => {
-    setActiveNav(nav as 'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs');
+    updateNav(nav as 'overview' | 'segments' | 'manifest' | 'payments' | 'session' | 'settings' | 'docs');
   };
 
   const handleHeaderTabClick = (tab: 'stream' | 'manifest' | 'payments' | 'docs') => {
-    if (tab === 'stream') setActiveNav('overview');
-    else if (tab === 'manifest') setActiveNav('manifest');
-    else if (tab === 'payments') setActiveNav('payments');
-    else if (tab === 'docs') setActiveNav('docs');
+    if (tab === 'stream') updateNav('overview');
+    else if (tab === 'manifest') updateNav('manifest');
+    else if (tab === 'payments') updateNav('payments');
+    else if (tab === 'docs') updateNav('docs');
   };
 
   return (
@@ -280,7 +313,7 @@ export default function App() {
                 session={session}
                 onPlaySegment={handlePlaySegment}
                 currentSegmentIndex={currentSegmentIndex}
-                setCurrentSegmentIndex={setCurrentSegmentIndex}
+                setCurrentSegmentIndex={updateSegmentIndex}
                 isPlaying={isPlaying}
                 setIsPlaying={setIsPlaying}
                 onOpenSessionRequested={() => setIsOpenSessionModal(true)}

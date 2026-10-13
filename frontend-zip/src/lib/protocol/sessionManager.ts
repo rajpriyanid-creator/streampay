@@ -34,6 +34,7 @@ const MAX_CREDIT_WINDOW_UNITS = 20n;
 const simulationMode = import.meta.env?.VITE_STREAM_SIMULATION === 'true';
 const sessionStorageKey = 'streampay.protocol.session.v1';
 const signerStorageKey = 'streampay.session-signer.v1';
+const simulationAccountKey = 'streampay.simulation-account.v1';
 
 function browserSessionStorage(): Storage | null {
   try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
@@ -45,6 +46,15 @@ function getOrCreateSignerKey(): Hex {
   if (/^0x[0-9a-fA-F]{64}$/.test(existing)) return existing as Hex;
   const created = generatePrivateKey();
   storage?.setItem(signerStorageKey, created);
+  return created;
+}
+
+function getOrCreateSimulationKey(): Hex {
+  const storage = browserSessionStorage();
+  const existing = storage?.getItem(simulationAccountKey) || '';
+  if (/^0x[0-9a-fA-F]{64}$/.test(existing)) return existing as Hex;
+  const created = generatePrivateKey();
+  storage?.setItem(simulationAccountKey, created);
   return created;
 }
 
@@ -104,9 +114,10 @@ export class LocalTestProvider {
 
 export class ProtocolLifecycleManager {
   private network: NetworkType = import.meta.env?.VITE_NETWORK === 'testnet' ? 'testnet' : 'local';
-  private simulationAccount = privateKeyToAccount(generatePrivateKey());
+  private simulationAccount = privateKeyToAccount(getOrCreateSimulationKey());
   private walletClient: ReturnType<typeof createWalletClient> | null = null;
   private listeners: (() => void)[] = [];
+  private walletSource: 'injected' | 'external' | 'simulation' = simulationMode ? 'simulation' : 'injected';
   private wallet: WalletState = { address: '', chainId: LOCAL_CHAIN_ID, network: 'local', isConnected: simulationMode, balanceUSDC: '0' };
   private session: StreamSessionState = { sessionId: null, status: 'inactive', cumulativeUnits: 0, settledUnits: 0, initialDepositUSDC: '0', unredeemedUSDC: '0', sessionSigner: '', payer: '', recipient: '', contractAddress: '', paymentToken: '', openedAt: null, lastTxHash: null, lastVoucherSignature: null, lastCloseAckSignature: null, verificationLogs: [], events: [], refundUSDC: '0', refundStatus: 'not-finalized', claimableUSDC: '0', activeSegmentIndex: null, isSimulated: simulationMode, error: null };
   private creatorOffer: { offer: any; signature: Hex } | null = null;
@@ -116,38 +127,148 @@ export class ProtocolLifecycleManager {
   private signerAccount = simulationMode ? this.simulationAccount : privateKeyToAccount(getOrCreateSignerKey());
 
   constructor() {
-    if (this.network === 'testnet') { this.wallet.network = 'testnet'; this.wallet.chainId = MONAD_TESTNET_CHAIN_ID; this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address; this.session.paymentToken = MONAD_PAYMENT_TOKEN; }
+    if (this.network === 'testnet') {
+      this.wallet.network = 'testnet';
+      this.wallet.chainId = MONAD_TESTNET_CHAIN_ID;
+      this.session.contractAddress = (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address;
+      this.session.paymentToken = MONAD_PAYMENT_TOKEN;
+    }
     this.restorePersistedState();
-    if (simulationMode) { this.wallet.address = this.simulationAccount.address; this.wallet.isConnected = true; this.session.payer = this.simulationAccount.address; this.session.sessionSigner = this.simulationAccount.address; }
-    if (typeof window !== 'undefined') { try { const provider = injectedProvider(); provider.on?.('accountsChanged', (accounts: unknown) => { void this.syncActiveAccount(Array.isArray(accounts) ? accounts as string[] : []); }); provider.on?.('chainChanged', () => { void this.syncActiveAccount(); }); window.setInterval(() => { void this.syncActiveAccount(); }, 1000); } catch {} }
+    if (simulationMode) {
+      this.walletSource = 'simulation';
+      this.wallet.address = this.simulationAccount.address;
+      this.wallet.isConnected = true;
+      if (!this.session.payer) this.session.payer = this.simulationAccount.address;
+      if (!this.session.sessionSigner) this.session.sessionSigner = this.simulationAccount.address;
+      this.payerAddress = this.simulationAccount.address;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const provider = injectedProvider();
+        provider.on?.('accountsChanged', (accounts: unknown) => {
+          void this.syncActiveAccount(Array.isArray(accounts) ? accounts as string[] : []);
+        });
+        provider.on?.('chainChanged', () => {
+          void this.syncActiveAccount();
+        });
+        // Initial account check
+        void this.syncActiveAccount();
+        window.setInterval(() => { void this.syncActiveAccount(); }, 2000);
+      } catch {}
+    }
   }
-  subscribe(cb: () => void): () => void { this.listeners.push(cb); return () => { this.listeners = this.listeners.filter((x: () => void) => x !== cb); }; }
+
+  subscribe(cb: () => void): () => void {
+    this.listeners.push(cb);
+    return () => { this.listeners = this.listeners.filter((x: () => void) => x !== cb); };
+  }
+
   private persistState() {
     const storage = browserSessionStorage();
     if (!storage) return;
     try {
       const verificationLogs = this.session.verificationLogs.map(({ mediaData: _mediaData, ...log }: any) => log);
-      storage.setItem(sessionStorageKey, JSON.stringify({ session: { ...this.session, verificationLogs }, creatorAddress: this.creatorAddress, creatorOffer: this.creatorOffer }));
+      storage.setItem(
+        sessionStorageKey,
+        JSON.stringify({
+          session: { ...this.session, verificationLogs },
+          creatorAddress: this.creatorAddress,
+          creatorOffer: this.creatorOffer,
+          payerAddress: this.payerAddress,
+          wallet: {
+            address: this.wallet.address,
+            network: this.wallet.network,
+            chainId: this.wallet.chainId,
+            isConnected: this.wallet.isConnected,
+            balanceUSDC: this.wallet.balanceUSDC,
+          },
+          walletSource: this.walletSource,
+          walletDisconnectRequested: this.walletDisconnectRequested,
+        })
+      );
     } catch { /* Browser storage is optional; protocol state remains authoritative. */ }
   }
+
   private restorePersistedState() {
     const raw = browserSessionStorage()?.getItem(sessionStorageKey);
     if (!raw) return;
     try {
-      const saved = JSON.parse(raw) as { session?: Partial<StreamSessionState>; creatorAddress?: Address | ''; creatorOffer?: { offer: any; signature: Hex } | null };
-      if (saved.session?.status === 'active' || saved.session?.status === 'closed') {
-        this.session = { ...this.session, ...saved.session, verificationLogs: saved.session.verificationLogs || [], events: saved.session.events || [] } as StreamSessionState;
+      const saved = JSON.parse(raw) as {
+        session?: Partial<StreamSessionState>;
+        creatorAddress?: Address | '';
+        creatorOffer?: { offer: any; signature: Hex } | null;
+        payerAddress?: Address | '';
+        wallet?: Partial<WalletState>;
+        walletSource?: 'injected' | 'external' | 'simulation';
+        walletDisconnectRequested?: boolean;
+      };
+      if (saved.session) {
+        let status = saved.session.status || 'inactive';
+        if (status === 'opening' || status === 'checkpointing' || status === 'closing') {
+          status = saved.session.sessionId ? 'active' : 'inactive';
+        }
+        this.session = {
+          ...this.session,
+          ...saved.session,
+          status,
+          verificationLogs: saved.session.verificationLogs || [],
+          events: saved.session.events || [],
+        } as StreamSessionState;
       }
-      this.creatorAddress = saved.creatorAddress || '';
-      this.creatorOffer = saved.creatorOffer || null;
-    } catch { browserSessionStorage()?.removeItem(sessionStorageKey); }
+      if (saved.creatorAddress) this.creatorAddress = saved.creatorAddress;
+      if (saved.creatorOffer) this.creatorOffer = saved.creatorOffer;
+      if (saved.payerAddress) this.payerAddress = saved.payerAddress;
+      if (saved.walletDisconnectRequested !== undefined) {
+        this.walletDisconnectRequested = saved.walletDisconnectRequested;
+      }
+      if (saved.walletSource) {
+        this.walletSource = saved.walletSource;
+      }
+      if (saved.wallet?.address && !this.walletDisconnectRequested) {
+        this.wallet.address = saved.wallet.address as Address;
+        this.wallet.isConnected = Boolean(saved.wallet.isConnected);
+        if (saved.wallet.network) this.wallet.network = saved.wallet.network;
+        if (saved.wallet.chainId) this.wallet.chainId = saved.wallet.chainId;
+        if (saved.wallet.balanceUSDC) this.wallet.balanceUSDC = saved.wallet.balanceUSDC;
+        if (!this.payerAddress) this.payerAddress = this.wallet.address;
+
+        if (typeof window !== 'undefined' && window.ethereum && !simulationMode && this.walletSource === 'injected') {
+          try {
+            const provider = injectedProvider();
+            this.walletClient = createWalletClient({
+              account: this.wallet.address,
+              chain: this.network === 'testnet' ? monadTestnetChain : undefined,
+              transport: custom(provider as never),
+            });
+            void this.refreshBalance(this.wallet.address);
+          } catch {}
+        }
+      }
+    } catch {
+      browserSessionStorage()?.removeItem(sessionStorageKey);
+    }
   }
-  private notify() { this.persistState(); this.listeners.forEach((x: () => void) => x()); }
-  private addEvent(type: string, txHash?: Hex, detail?: string): void { this.session.events.unshift({ id: `${Date.now()}-${type}`, type, timestamp: new Date().toISOString(), txHash, detail }); }
+
+  private notify() {
+    this.persistState();
+    this.listeners.forEach((x: () => void) => x());
+  }
+
+  private addEvent(type: string, txHash?: Hex, detail?: string): void {
+    this.session.events.unshift({ id: `${Date.now()}-${type}`, type, timestamp: new Date().toISOString(), txHash, detail });
+  }
+
   getNetwork(): NetworkType { return this.network; }
   getWallet(): WalletState { return { ...this.wallet }; }
   getSession(): StreamSessionState { return { ...this.session, verificationLogs: [...this.session.verificationLogs] }; }
-  getCreatorState(): { address: Address | ''; offerSigned: boolean; closeAckSigned: boolean } { return { address: this.creatorAddress, offerSigned: Boolean(this.creatorOffer), closeAckSigned: Boolean(this.session.lastCloseAckSignature) }; }
+  getCreatorState(): { address: Address | ''; offerSigned: boolean; closeAckSigned: boolean } {
+    return {
+      address: this.creatorAddress,
+      offerSigned: Boolean(this.creatorOffer),
+      closeAckSigned: Boolean(this.session.lastCloseAckSignature),
+    };
+  }
+
   setCreatorAddress(value: string): void {
     const next = value.trim() as Address | '';
     if (this.creatorAddress && next.toLowerCase() !== this.creatorAddress.toLowerCase()) {
@@ -157,9 +278,25 @@ export class ProtocolLifecycleManager {
     this.creatorAddress = next;
     this.notify();
   }
-  resetCreatorAuthorization(): void { this.creatorAddress = ''; this.creatorOffer = null; this.session.lastCloseAckSignature = null; this.notify(); }
+
+  resetCreatorAuthorization(): void {
+    this.creatorAddress = '';
+    this.creatorOffer = null;
+    this.session.lastCloseAckSignature = null;
+    this.notify();
+  }
+
   async getActiveAccount(): Promise<Address> { return this.refreshInjectedWallet(); }
   async reconnectWallet(): Promise<void> { await this.connectWallet(); }
+
+  private async ensureWalletClient(expected?: Address): Promise<ReturnType<typeof createWalletClient>> {
+    if (this.walletClient && (!expected || this.wallet.address?.toLowerCase() === expected.toLowerCase())) {
+      return this.walletClient;
+    }
+    await this.refreshInjectedWallet(expected);
+    if (!this.walletClient) throw new Error('Wallet client not initialized. Unlock and connect your wallet extension.');
+    return this.walletClient;
+  }
 
   private async refreshBalance(address: Address): Promise<void> {
     if (this.network === 'testnet' && address) {
@@ -180,11 +317,12 @@ export class ProtocolLifecycleManager {
   private async syncActiveAccount(requestedAccounts?: string[]): Promise<void> {
     if (!window.ethereum) return;
     if (this.walletDisconnectRequested) return;
+    if (this.walletSource === 'external') return;
     try {
       const provider = injectedProvider();
       const accounts = requestedAccounts ?? await provider.request({ method: 'eth_accounts' }) as string[];
       if (!accounts.length) {
-        if (this.wallet.isConnected || this.wallet.address) {
+        if (this.walletSource === 'injected' && (this.wallet.isConnected || this.wallet.address)) {
           this.wallet.isConnected = false;
           this.wallet.address = '';
           this.wallet.balanceUSDC = '0';
@@ -202,6 +340,7 @@ export class ProtocolLifecycleManager {
       const accountChanged = !this.wallet.isConnected || !this.wallet.address || this.wallet.address.toLowerCase() !== active.toLowerCase();
       const chainChanged = this.wallet.chainId !== currentChainId;
       if (accountChanged || chainChanged) {
+        this.walletSource = 'injected';
         this.wallet.chainId = currentChainId;
         await this.refreshInjectedWallet(active, accounts);
         await this.refreshBalance(active);
@@ -209,7 +348,7 @@ export class ProtocolLifecycleManager {
         this.notify();
       }
     } catch {
-      if (this.wallet.isConnected || this.wallet.address) {
+      if (this.walletSource === 'injected' && (this.wallet.isConnected || this.wallet.address)) {
         this.wallet.isConnected = false;
         this.wallet.address = '';
         this.notify();
@@ -220,23 +359,39 @@ export class ProtocolLifecycleManager {
   async syncExternalAccount(account: string): Promise<void> {
     if (!account) return;
     const addr = account as Address;
+    this.walletSource = 'external';
     this.walletDisconnectRequested = false;
     this.wallet.address = addr;
     this.wallet.isConnected = true;
+    if (!this.creatorAddress || addr.toLowerCase() !== this.creatorAddress.toLowerCase()) {
+      this.payerAddress = addr;
+      if (!this.session.payer || this.session.status === 'inactive') {
+        this.session.payer = addr;
+      }
+    }
     await this.refreshBalance(addr);
     this.notify();
   }
 
   setNetwork(network: NetworkType): void {
-    this.network = network; this.wallet.network = network; this.wallet.chainId = network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
+    this.network = network;
+    this.wallet.network = network;
+    this.wallet.chainId = network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
     this.session.contractAddress = network === 'testnet' ? (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address : '';
     this.session.paymentToken = network === 'testnet' ? MONAD_PAYMENT_TOKEN : '';
-    if (network === 'testnet' && simulationMode) { this.wallet.isConnected = false; this.wallet.address = ''; this.session.payer = ''; this.session.sessionSigner = ''; this.session.isSimulated = false; }
+    if (network === 'testnet' && simulationMode) {
+      this.wallet.isConnected = false;
+      this.wallet.address = '';
+      this.session.payer = '';
+      this.session.sessionSigner = '';
+      this.session.isSimulated = false;
+    }
     this.notify();
   }
 
   async connectWallet(): Promise<void> {
     this.walletDisconnectRequested = false;
+    this.walletSource = 'injected';
     if (this.network === 'local' && simulationMode) { this.wallet.isConnected = true; this.notify(); return; }
     const provider = injectedProvider();
     const chainId = this.network === 'testnet' ? MONAD_TESTNET_CHAIN_ID : LOCAL_CHAIN_ID;
@@ -272,7 +427,8 @@ export class ProtocolLifecycleManager {
       this.payerAddress = address;
       this.session.payer = address;
     }
-    this.session.isSimulated = false; this.notify();
+    this.session.isSimulated = false;
+    this.notify();
   }
 
   private async refreshInjectedWallet(expected?: Address, requestedAccounts?: string[]): Promise<Address> {
@@ -286,11 +442,19 @@ export class ProtocolLifecycleManager {
     return active;
   }
 
-  disconnectWallet(): void { this.walletDisconnectRequested = true; this.wallet.isConnected = false; this.wallet.address = ''; this.wallet.balanceUSDC = '0'; this.walletClient = null; this.notify(); }
+  disconnectWallet(): void {
+    this.walletDisconnectRequested = true;
+    this.walletSource = 'injected';
+    this.wallet.isConnected = false;
+    this.wallet.address = '';
+    this.wallet.balanceUSDC = '0';
+    this.walletClient = null;
+    this.notify();
+  }
 
   async signCreatorOffer(manifest: StreamManifest, creatorAddress: string): Promise<void> {
-    if (!this.walletClient || !this.wallet.isConnected) throw new Error('Connect the Creator wallet before signing.');
     const requestedCreator = requireAddress(creatorAddress.trim(), 'Creator wallet');
+    await this.ensureWalletClient();
     const activeAccount = await this.refreshInjectedWallet();
     let creator = requestedCreator;
     if (activeAccount.toLowerCase() !== requestedCreator.toLowerCase()) {
@@ -305,33 +469,72 @@ export class ProtocolLifecycleManager {
     if (creator.toLowerCase() === this.payerAddress.toLowerCase()) throw new Error('Creator and Payer must be different accounts.');
     if (!manifest.manifestRoot || !manifest.manifestRoot.startsWith('0x')) throw new Error('Manifest root is unavailable.');
     const unitPrice = BigInt(manifest.unitPrice);
-    // The deployed settlement contract caps one credit window at 5 segments / 20 units.
-    // Longer videos continue through checkpointing rather than signing an invalid offer.
     const maxUnits = 20n;
     const offer = buildContentOffer({ recipient: creator, token: MONAD_PAYMENT_TOKEN, manifestRoot: manifest.manifestRoot, contentIdHash: manifest.contentIdHash, pricingPolicyHash: manifest.pricingPolicyHash, unitPrice, maxCreditSegments: Math.min(manifest.totalSegments, 5), maxCreditWindowUnits: maxUnits, maxUnredeemedAmount: unitPrice * maxUnits });
-    const signature = await signOffer(this.walletClient, requireAddress(this.session.contractAddress, 'Settlement contract'), creator, offer, MONAD_TESTNET_CHAIN_ID);
-    this.creatorAddress = creator; this.creatorOffer = { offer, signature }; this.notify();
+    const signature = await signOffer(this.walletClient!, requireAddress(this.session.contractAddress, 'Settlement contract'), creator, offer, MONAD_TESTNET_CHAIN_ID);
+    this.creatorAddress = creator;
+    this.creatorOffer = { offer, signature };
+    this.notify();
   }
 
   async openPaymentSession(manifest: StreamManifest, depositUSDC = '0.0500'): Promise<Hex | null> {
-    if (!this.wallet.isConnected) throw new Error('Connect a wallet first.');
-    this.session.status = 'opening'; this.session.error = null; this.notify();
+    if (!this.wallet.isConnected && !simulationMode) {
+      // Attempt silent auto-reconnect before rejecting
+      try { await this.ensureWalletClient(); } catch { throw new Error('Connect a wallet first.'); }
+    }
+    this.session.status = 'opening';
+    this.session.error = null;
+    this.notify();
     try {
       if (!simulationMode) {
         if (this.network !== 'testnet') throw new Error('Real wallet opening is available on Monad Testnet only.');
         if (!this.creatorOffer) throw new Error('Creator signature required. Enter the Creator address, switch Rabby to that account, sign the offer, then switch back to the Payer.');
-        if (!this.walletClient) throw new Error('Connect the Payer wallet first.');
-        await this.refreshInjectedWallet(requireAddress(this.payerAddress || this.session.payer || this.wallet.address, 'Payer wallet'));
+        await this.ensureWalletClient(requireAddress(this.payerAddress || this.session.payer || this.wallet.address, 'Payer wallet'));
         if (this.creatorOffer.offer.recipient.toLowerCase() === this.wallet.address.toLowerCase()) throw new Error('The stored Creator offer belongs to the Payer account. Reset Creator Authorization, select Account 2, and sign a new offer.');
         const deposit = BigInt(Math.round(Number(depositUSDC) * 1_000_000));
         const payer = requireAddress(this.wallet.address, 'Payer wallet');
-        const result = await openRealSession({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, payer, recipient: this.creatorOffer.offer.recipient, signerAddress: this.signerAccount.address, manifestRoot: manifest.manifestRoot, offer: this.creatorOffer.offer, offerSignature: this.creatorOffer.signature, deposit, chainId: MONAD_TESTNET_CHAIN_ID });
-        this.session.sessionId = result.sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = false; this.session.lastTxHash = result.txHash; this.session.refundStatus = 'not-finalized'; this.session.refundUSDC = '0'; this.session.claimableUSDC = '0'; this.session.contractAddress = requireAddress(this.session.contractAddress, 'Settlement contract'); this.session.paymentToken = MONAD_PAYMENT_TOKEN; this.session.payer = this.wallet.address; this.session.recipient = this.creatorOffer.offer.recipient; this.session.sessionSigner = this.signerAccount.address; this.addEvent('Session opened', result.txHash); this.notify(); return result.txHash;
+        const result = await openRealSession({ walletClient: this.walletClient!, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, payer, recipient: this.creatorOffer.offer.recipient, signerAddress: this.signerAccount.address, manifestRoot: manifest.manifestRoot, offer: this.creatorOffer.offer, offerSignature: this.creatorOffer.signature, deposit, chainId: MONAD_TESTNET_CHAIN_ID });
+        this.session.sessionId = result.sessionId;
+        this.session.status = 'active';
+        this.session.initialDepositUSDC = depositUSDC;
+        this.session.openedAt = Date.now();
+        this.session.isSimulated = false;
+        this.session.lastTxHash = result.txHash;
+        this.session.refundStatus = 'not-finalized';
+        this.session.refundUSDC = '0';
+        this.session.claimableUSDC = '0';
+        this.session.contractAddress = requireAddress(this.session.contractAddress, 'Settlement contract');
+        this.session.paymentToken = MONAD_PAYMENT_TOKEN;
+        this.session.payer = this.wallet.address;
+        this.session.recipient = this.creatorOffer.offer.recipient;
+        this.session.sessionSigner = this.signerAccount.address;
+        this.addEvent('Session opened', result.txHash);
+        this.notify();
+        return result.txHash;
       }
       const now = BigInt(Math.floor(Date.now() / 1000));
       const sessionId = keccak256(encodePacked(['address', 'bytes32', 'uint256'], [this.simulationAccount.address, manifest.manifestRoot, now]));
-      this.session.sessionId = sessionId; this.session.status = 'active'; this.session.initialDepositUSDC = depositUSDC; this.session.openedAt = Date.now(); this.session.isSimulated = true; this.session.contractAddress = zeroAddress; this.session.paymentToken = ''; this.session.refundStatus = 'not-finalized'; this.session.refundUSDC = '0'; this.session.claimableUSDC = '0'; this.addEvent('Session opened', undefined, 'Simulation mode'); this.notify(); return null;
-    } catch (err) { this.session.status = 'inactive'; this.session.error = err instanceof Error ? err.message : 'Failed to open session'; this.notify(); throw err; }
+      this.session.sessionId = sessionId;
+      this.session.status = 'active';
+      this.session.initialDepositUSDC = depositUSDC;
+      this.session.openedAt = Date.now();
+      this.session.isSimulated = true;
+      this.session.contractAddress = zeroAddress;
+      this.session.paymentToken = '';
+      this.session.refundStatus = 'not-finalized';
+      this.session.refundUSDC = '0';
+      this.session.claimableUSDC = '0';
+      this.session.payer = this.simulationAccount.address;
+      this.session.sessionSigner = this.simulationAccount.address;
+      this.addEvent('Session opened', undefined, 'Simulation mode');
+      this.notify();
+      return null;
+    } catch (err) {
+      this.session.status = 'inactive';
+      this.session.error = err instanceof Error ? err.message : 'Failed to open session';
+      this.notify();
+      throw err;
+    }
   }
 
   private async signVoucher(sessionId: Hex, cumulativeUnits: bigint): Promise<Hex> {
@@ -343,43 +546,89 @@ export class ProtocolLifecycleManager {
 
   async requestAndVerifySegment(manifest: StreamManifest, segmentIndex: number): Promise<VerificationLog> {
     if (!this.session.sessionId || this.session.status !== 'active') throw new Error('No active payment session.');
-    const segment: SegmentManifest | undefined = manifest.segments[segmentIndex]; if (!segment) throw new Error(`Segment ${segmentIndex} not found.`);
-    this.session.activeSegmentIndex = segmentIndex; this.notify();
+    const segment: SegmentManifest | undefined = manifest.segments[segmentIndex];
+    if (!segment) throw new Error(`Segment ${segmentIndex} not found.`);
+    this.session.activeSegmentIndex = segmentIndex;
+    this.notify();
     const cumulativeUnits = BigInt(segment.cumulativeUnits);
     const settledUnits = BigInt(this.session.settledUnits);
     if (cumulativeUnits > settledUnits + MAX_CREDIT_WINDOW_UNITS) {
       if (this.session.cumulativeUnits <= this.session.settledUnits || !this.session.lastVoucherSignature) {
         throw new Error('Credit window is full. Checkpoint the current session before requesting another segment.');
       }
-      // The previous voucher is the highest delivered voucher and can be
-      // checkpointed before signing/requesting the next segment.
       await this.checkpointSession();
     }
-    const signature = simulationMode ? await this.signVoucher(this.session.sessionId, cumulativeUnits) : await signRealVoucher(this.signerAccount, requireAddress(this.session.contractAddress, 'Settlement contract'), this.session.sessionId, cumulativeUnits, MONAD_TESTNET_CHAIN_ID);
+    const signature = simulationMode
+      ? await this.signVoucher(this.session.sessionId, cumulativeUnits)
+      : await signRealVoucher(this.signerAccount, requireAddress(this.session.contractAddress, 'Settlement contract'), this.session.sessionId, cumulativeUnits, MONAD_TESTNET_CHAIN_ID);
     this.session.lastVoucherSignature = signature;
-    const access = await accessService.requestSegmentAccess({ sessionId: this.session.sessionId, sessionSigner: (this.session.sessionSigner || this.simulationAccount.address) as Address, recipient: (this.session.recipient || zeroAddress) as Address, contractAddress: this.session.contractAddress || zeroAddress, chainId: this.wallet.chainId, streamId: manifest.streamId, segmentIndex, voucher: { sessionId: this.session.sessionId, cumulativeUnits: cumulativeUnits.toString(), signature } });
+    const access = await accessService.requestSegmentAccess({
+      sessionId: this.session.sessionId,
+      sessionSigner: (this.session.sessionSigner || this.signerAccount.address) as Address,
+      recipient: (this.session.recipient || zeroAddress) as Address,
+      contractAddress: this.session.contractAddress || zeroAddress,
+      chainId: this.wallet.chainId,
+      streamId: manifest.streamId,
+      segmentIndex,
+      voucher: { sessionId: this.session.sessionId, cumulativeUnits: cumulativeUnits.toString(), signature },
+    });
     const { data, byteLength, mimeType } = await accessService.fetchGatedContent(manifest.streamId, segmentIndex, access.segmentToken, access.contentUrl);
     const verification = await verifySegmentIntegrity(data, segment, manifest.manifestRoot);
-    const leaf = computeSegmentLeaf(segment); const merkleValid = verifyMerkleProof(leaf, segment.merkleProof, manifest.manifestRoot);
+    const leaf = computeSegmentLeaf(segment);
+    const merkleValid = verifyMerkleProof(leaf, segment.merkleProof, manifest.manifestRoot);
     if (!verification.sha256Valid || !merkleValid) throw new Error('Segment integrity verification failed.');
-    this.session.cumulativeUnits = Number(cumulativeUnits); this.session.unredeemedUSDC = ((Number(cumulativeUnits) * Number(manifest.unitPrice)) / 1_000_000).toFixed(6);
+    this.session.cumulativeUnits = Number(cumulativeUnits);
+    this.session.unredeemedUSDC = ((Number(cumulativeUnits) * Number(manifest.unitPrice)) / 1_000_000).toFixed(6);
     const log: VerificationLog = { id: `verif-${Date.now()}-${segmentIndex}`, segmentIndex, timestamp: new Date().toISOString(), durationUnits: segment.durationUnits, byteLength, segmentSha256: segment.segmentSha256, computedSha256: verification.computedSha256, sha256Valid: verification.sha256Valid, leaf, merkleValid, proofLength: segment.merkleProof.length, token: access.segmentToken, cumulativeUnits: cumulativeUnits.toString(), mediaMimeType: mimeType, mediaData: data };
-    this.session.verificationLogs.unshift(log); this.notify(); return log;
+    this.session.verificationLogs.unshift(log);
+    this.notify();
+    return log;
   }
 
   async checkpointSession(): Promise<Hex | null> {
     if (!this.session.sessionId) throw new Error('No active session');
-    if (simulationMode) { this.session.status = 'checkpointing'; this.notify(); await accessService.checkpointSync(this.session.sessionId); this.session.settledUnits = this.session.cumulativeUnits; this.session.status = 'active'; this.notify(); return null; }
-    if (!this.walletClient || !this.session.lastVoucherSignature) throw new Error('Play at least one segment before checkpointing.');
-    await this.refreshInjectedWallet(requireAddress(this.session.payer, 'Payer wallet'));
-    this.session.status = 'checkpointing'; this.notify();
-    const tx = await checkpointReal({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), account: requireAddress(this.wallet.address, 'Payer wallet'), sessionId: this.session.sessionId, cumulativeUnits: BigInt(this.session.cumulativeUnits), voucherSig: this.session.lastVoucherSignature });
-    this.session.lastTxHash = tx; this.session.settledUnits = this.session.cumulativeUnits; this.addEvent('Checkpoint settled', tx); this.session.status = 'active'; this.notify(); return tx;
+    if (simulationMode) {
+      this.session.status = 'checkpointing';
+      this.notify();
+      await accessService.checkpointSync(this.session.sessionId);
+      this.session.settledUnits = this.session.cumulativeUnits;
+      this.session.status = 'active';
+      this.notify();
+      return null;
+    }
+    if (!this.session.lastVoucherSignature) throw new Error('Play at least one segment before checkpointing.');
+    await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
+    this.session.status = 'checkpointing';
+    this.notify();
+    const tx = await checkpointReal({
+      walletClient: this.walletClient!,
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+      sessionId: this.session.sessionId,
+      cumulativeUnits: BigInt(this.session.cumulativeUnits),
+      voucherSig: this.session.lastVoucherSignature,
+    });
+    this.session.lastTxHash = tx;
+    this.session.settledUnits = this.session.cumulativeUnits;
+    this.addEvent('Checkpoint settled', tx);
+    this.session.status = 'active';
+    this.notify();
+    return tx;
   }
 
   async closeSession(): Promise<Hex | null> {
     if (!this.session.sessionId) throw new Error('No active session');
-    if (simulationMode) { this.session.status = 'closing'; this.notify(); this.session.status = 'closed'; this.session.settledUnits = this.session.cumulativeUnits; this.session.lastCloseAckSignature = null; this.session.lastTxHash = null; this.notify(); return null; }
+    if (simulationMode) {
+      this.session.status = 'closing';
+      this.notify();
+      this.session.status = 'closed';
+      this.session.settledUnits = this.session.cumulativeUnits;
+      this.session.lastCloseAckSignature = null;
+      this.session.lastTxHash = null;
+      this.notify();
+      return null;
+    }
     if (!this.session.lastVoucherSignature && this.session.cumulativeUnits === 0) {
       this.session.lastVoucherSignature = await signRealVoucher(
         this.signerAccount,
@@ -389,35 +638,77 @@ export class ProtocolLifecycleManager {
         MONAD_TESTNET_CHAIN_ID
       );
     }
-    if (!this.walletClient || !this.session.lastVoucherSignature || !this.session.lastCloseAckSignature) throw new Error('Creator close authorization is required. Switch to the Creator account and sign the current close authorization first.');
-    await this.refreshInjectedWallet(requireAddress(this.session.payer, 'Payer wallet'));
-    this.session.status = 'closing'; this.notify();
-    const tx = await closeRealSession({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), account: requireAddress(this.wallet.address, 'Payer wallet'), sessionId: this.session.sessionId, cumulativeUnits: BigInt(this.session.cumulativeUnits), voucherSig: this.session.lastVoucherSignature, ackSig: this.session.lastCloseAckSignature });
+    if (!this.session.lastVoucherSignature || !this.session.lastCloseAckSignature) {
+      throw new Error('Creator close authorization is required. Switch to the Creator account and sign the current close authorization first.');
+    }
+    await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
+    this.session.status = 'closing';
+    this.notify();
+    const tx = await closeRealSession({
+      walletClient: this.walletClient!,
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+      sessionId: this.session.sessionId,
+      cumulativeUnits: BigInt(this.session.cumulativeUnits),
+      voucherSig: this.session.lastVoucherSignature,
+      ackSig: this.session.lastCloseAckSignature,
+    });
     const deposit = Number(this.session.initialDepositUSDC);
     const billed = Number(this.session.unredeemedUSDC);
     this.session.refundUSDC = Math.max(0, deposit - billed).toFixed(6);
     this.session.refundStatus = 'allocated';
-    this.session.lastTxHash = tx; this.session.status = 'closed'; this.session.settledUnits = this.session.cumulativeUnits; this.addEvent('Session closed / refund allocated', tx, `${this.session.refundUSDC} USDC refund allocation`); this.notify(); return tx;
+    this.session.lastTxHash = tx;
+    this.session.status = 'closed';
+    this.session.settledUnits = this.session.cumulativeUnits;
+    this.addEvent('Session closed / refund allocated', tx, `${this.session.refundUSDC} USDC refund allocation`);
+    this.notify();
+    return tx;
   }
 
   async refreshClaimableRefund(): Promise<string> {
-    if (simulationMode || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) return this.session.claimableUSDC;
-    const amount = await readClaimable({ rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, account: requireAddress(this.wallet.address, 'Wallet') });
-    this.session.claimableUSDC = (Number(amount) / 1_000_000).toFixed(6); if (amount > 0n) this.session.refundStatus = 'claimable'; this.notify(); return this.session.claimableUSDC;
+    if (simulationMode || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) {
+      return this.session.claimableUSDC;
+    }
+    const amount = await readClaimable({
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      token: MONAD_PAYMENT_TOKEN,
+      account: requireAddress(this.wallet.address, 'Wallet'),
+    });
+    this.session.claimableUSDC = (Number(amount) / 1_000_000).toFixed(6);
+    if (amount > 0n) this.session.refundStatus = 'claimable';
+    this.notify();
+    return this.session.claimableUSDC;
   }
 
   async claimRefund(): Promise<Hex | null> {
-    if (simulationMode) { this.session.claimableUSDC = '0'; this.session.refundStatus = 'claimed'; this.notify(); return null; }
-    if (!this.walletClient) throw new Error('Connect the payer wallet before claiming a refund.');
-    await this.refreshInjectedWallet(requireAddress(this.wallet.address, 'Payer wallet'));
-    const tx = await claimRefund({ walletClient: this.walletClient, rpc: rpcFor(this.network), settlement: requireAddress(this.session.contractAddress, 'Settlement contract'), token: MONAD_PAYMENT_TOKEN, account: requireAddress(this.wallet.address, 'Payer wallet') });
-    this.session.claimableUSDC = '0'; this.session.refundStatus = 'claimed'; this.session.lastTxHash = tx; this.addEvent('Claimable refund claimed', tx); this.notify(); return tx;
+    if (simulationMode) {
+      this.session.claimableUSDC = '0';
+      this.session.refundStatus = 'claimed';
+      this.notify();
+      return null;
+    }
+    await this.ensureWalletClient(requireAddress(this.wallet.address, 'Payer wallet'));
+    const tx = await claimRefund({
+      walletClient: this.walletClient!,
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      token: MONAD_PAYMENT_TOKEN,
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+    });
+    this.session.claimableUSDC = '0';
+    this.session.refundStatus = 'claimed';
+    this.session.lastTxHash = tx;
+    this.addEvent('Claimable refund claimed', tx);
+    this.notify();
+    return tx;
   }
 
   async signCreatorCloseAuthorization(): Promise<void> {
-    if (!this.walletClient || !this.session.sessionId) throw new Error('An open session is required.');
+    if (!this.session.sessionId) throw new Error('An open session is required.');
     if (!this.creatorAddress) throw new Error('Creator address is not set.');
-    await this.refreshInjectedWallet(this.creatorAddress);
+    await this.ensureWalletClient(this.creatorAddress);
     if (!this.session.lastVoucherSignature && this.session.cumulativeUnits === 0) {
       if (simulationMode) {
         this.session.lastVoucherSignature = await this.signVoucher(this.session.sessionId, 0n);
@@ -432,8 +723,9 @@ export class ProtocolLifecycleManager {
       }
     }
     const digest = await readVoucherDigest(rpcFor(this.network), requireAddress(this.session.contractAddress, 'Settlement contract'), this.session.sessionId, BigInt(this.session.cumulativeUnits));
-    const sig = await signCloseAck(this.walletClient, requireAddress(this.session.contractAddress, 'Settlement contract'), this.creatorAddress, this.session.sessionId, BigInt(this.session.cumulativeUnits), digest, MONAD_TESTNET_CHAIN_ID);
-    this.session.lastCloseAckSignature = sig; this.notify();
+    const sig = await signCloseAck(this.walletClient!, requireAddress(this.session.contractAddress, 'Settlement contract'), this.creatorAddress, this.session.sessionId, BigInt(this.session.cumulativeUnits), digest, MONAD_TESTNET_CHAIN_ID);
+    this.session.lastCloseAckSignature = sig;
+    this.notify();
   }
 }
 

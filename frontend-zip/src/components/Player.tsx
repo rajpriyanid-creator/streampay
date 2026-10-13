@@ -75,6 +75,12 @@ export const Player: React.FC<PlayerProps> = ({
   const totalDuration = manifest.totalDurationSec || 10;
   const segmentDuration = totalDuration / manifest.totalSegments;
 
+  useEffect(() => {
+    if (!isPlaying) {
+      setPlaybackTime(currentSegmentIndex * segmentDuration);
+    }
+  }, [currentSegmentIndex, segmentDuration, isPlaying]);
+
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
