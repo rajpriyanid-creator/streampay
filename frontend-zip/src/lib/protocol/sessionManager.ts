@@ -232,8 +232,10 @@ export class ProtocolLifecycleManager {
     if (creator.toLowerCase() === this.payerAddress.toLowerCase()) throw new Error('Creator and Payer must be different accounts.');
     if (!manifest.manifestRoot || !manifest.manifestRoot.startsWith('0x')) throw new Error('Manifest root is unavailable.');
     const unitPrice = BigInt(manifest.unitPrice);
-    const maxUnits = BigInt(manifest.totalSegments * 2);
-    const offer = buildContentOffer({ recipient: creator, token: MONAD_PAYMENT_TOKEN, manifestRoot: manifest.manifestRoot, contentIdHash: manifest.contentIdHash, pricingPolicyHash: manifest.pricingPolicyHash, unitPrice, maxCreditSegments: manifest.totalSegments, maxCreditWindowUnits: maxUnits, maxUnredeemedAmount: unitPrice * maxUnits });
+    // The deployed settlement contract caps one credit window at 5 segments / 20 units.
+    // Longer videos continue through checkpointing rather than signing an invalid offer.
+    const maxUnits = 20n;
+    const offer = buildContentOffer({ recipient: creator, token: MONAD_PAYMENT_TOKEN, manifestRoot: manifest.manifestRoot, contentIdHash: manifest.contentIdHash, pricingPolicyHash: manifest.pricingPolicyHash, unitPrice, maxCreditSegments: Math.min(manifest.totalSegments, 5), maxCreditWindowUnits: maxUnits, maxUnredeemedAmount: unitPrice * maxUnits });
     const signature = await signOffer(this.walletClient, requireAddress(this.session.contractAddress, 'Settlement contract'), creator, offer, MONAD_TESTNET_CHAIN_ID);
     this.creatorAddress = creator; this.creatorOffer = { offer, signature }; this.notify();
   }
