@@ -586,17 +586,25 @@ export class ProtocolLifecycleManager {
   }
 
   async checkpointSession(): Promise<Hex | null> {
-    if (!this.session.sessionId) throw new Error('No active session');
-    if (simulationMode) {
+    if (!this.session.sessionId) throw new Error('No active session.');
+    if (this.session.cumulativeUnits <= this.session.settledUnits) {
+      throw new Error(`Already checkpointed up to ${this.session.settledUnits} units. Stream a video segment first to advance units before checkpointing.`);
+    }
+    if (simulationMode || this.session.isSimulated) {
       this.session.status = 'checkpointing';
       this.notify();
-      await accessService.checkpointSync(this.session.sessionId);
+      try {
+        await accessService.checkpointSync(this.session.sessionId, this.session.cumulativeUnits);
+      } catch (err) {
+        console.warn('Backend checkpoint sync warning (proceeding with local simulation):', err);
+      }
       this.session.settledUnits = this.session.cumulativeUnits;
       this.session.status = 'active';
+      this.addEvent('Checkpoint settled', undefined, `Simulation settled at ${this.session.settledUnits} units`);
       this.notify();
       return null;
     }
-    if (!this.session.lastVoucherSignature) throw new Error('Play at least one segment before checkpointing.');
+    if (!this.session.lastVoucherSignature) throw new Error('Play at least one segment to generate a signed voucher before checkpointing.');
     await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
     this.session.status = 'checkpointing';
     this.notify();
@@ -611,21 +619,28 @@ export class ProtocolLifecycleManager {
     });
     this.session.lastTxHash = tx;
     this.session.settledUnits = this.session.cumulativeUnits;
-    this.addEvent('Checkpoint settled', tx);
+    this.addEvent('Checkpoint settled', tx, `Settled at ${this.session.settledUnits} units on-chain`);
     this.session.status = 'active';
     this.notify();
     return tx;
   }
 
   async closeSession(): Promise<Hex | null> {
-    if (!this.session.sessionId) throw new Error('No active session');
-    if (simulationMode) {
+    if (!this.session.sessionId) throw new Error('No active session.');
+    if (simulationMode || this.session.isSimulated) {
       this.session.status = 'closing';
       this.notify();
+      const deposit = Number(this.session.initialDepositUSDC) || 0;
+      const billed = Number(this.session.unredeemedUSDC) || 0;
+      const refund = Math.max(0, deposit - billed).toFixed(6);
+      this.session.refundUSDC = refund;
+      this.session.refundStatus = Number(refund) > 0 ? 'allocated' : 'not-finalized';
+      this.session.claimableUSDC = refund;
       this.session.status = 'closed';
       this.session.settledUnits = this.session.cumulativeUnits;
       this.session.lastCloseAckSignature = null;
       this.session.lastTxHash = null;
+      this.addEvent('Session closed / refund allocated', undefined, `${refund} USDC allocated for refund`);
       this.notify();
       return null;
     }
@@ -639,7 +654,7 @@ export class ProtocolLifecycleManager {
       );
     }
     if (!this.session.lastVoucherSignature || !this.session.lastCloseAckSignature) {
-      throw new Error('Creator close authorization is required. Switch to the Creator account and sign the current close authorization first.');
+      throw new Error('Creator close authorization required. Click “Sign Creator Close Ack” with the Creator account first, then close as Payer.');
     }
     await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
     this.session.status = 'closing';
@@ -654,20 +669,31 @@ export class ProtocolLifecycleManager {
       voucherSig: this.session.lastVoucherSignature,
       ackSig: this.session.lastCloseAckSignature,
     });
-    const deposit = Number(this.session.initialDepositUSDC);
-    const billed = Number(this.session.unredeemedUSDC);
-    this.session.refundUSDC = Math.max(0, deposit - billed).toFixed(6);
-    this.session.refundStatus = 'allocated';
+    const deposit = Number(this.session.initialDepositUSDC) || 0;
+    const billed = Number(this.session.unredeemedUSDC) || 0;
+    const refund = Math.max(0, deposit - billed).toFixed(6);
+    this.session.refundUSDC = refund;
     this.session.lastTxHash = tx;
     this.session.status = 'closed';
     this.session.settledUnits = this.session.cumulativeUnits;
-    this.addEvent('Session closed / refund allocated', tx, `${this.session.refundUSDC} USDC refund allocation`);
+
+    // Check on-chain balance and claimable amount
+    await this.refreshBalance(this.wallet.address);
+    const claimableAmount = await this.refreshClaimableRefund();
+    if (Number(claimableAmount) > 0) {
+      this.session.refundStatus = 'claimable';
+      this.session.claimableUSDC = claimableAmount;
+    } else {
+      this.session.refundStatus = 'allocated';
+      this.session.claimableUSDC = '0';
+    }
+    this.addEvent('Session closed on-chain', tx, `${refund} USDC refund on-chain`);
     this.notify();
     return tx;
   }
 
   async refreshClaimableRefund(): Promise<string> {
-    if (simulationMode || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) {
+    if (simulationMode || this.session.isSimulated || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) {
       return this.session.claimableUSDC;
     }
     const amount = await readClaimable({
@@ -683,9 +709,13 @@ export class ProtocolLifecycleManager {
   }
 
   async claimRefund(): Promise<Hex | null> {
-    if (simulationMode) {
+    if (simulationMode || this.session.isSimulated) {
+      const amount = this.session.claimableUSDC || this.session.refundUSDC || '0';
       this.session.claimableUSDC = '0';
       this.session.refundStatus = 'claimed';
+      const currentBal = Number(this.wallet.balanceUSDC) || 0;
+      this.wallet.balanceUSDC = (currentBal + Number(amount)).toFixed(6);
+      this.addEvent('Claimable refund claimed', undefined, `${amount} USDC refund claimed`);
       this.notify();
       return null;
     }
@@ -700,6 +730,7 @@ export class ProtocolLifecycleManager {
     this.session.claimableUSDC = '0';
     this.session.refundStatus = 'claimed';
     this.session.lastTxHash = tx;
+    await this.refreshBalance(this.wallet.address);
     this.addEvent('Claimable refund claimed', tx);
     this.notify();
     return tx;

@@ -15,6 +15,9 @@ interface PaymentsViewProps {
   onCloseSession: () => void;
   onClaimRefund: () => void;
   onRefreshClaimable: () => void;
+  onOpenSession?: () => void;
+  onSignCreatorClose?: () => void;
+  creatorCloseSigned?: boolean;
 }
 
 export const PaymentsView: React.FC<PaymentsViewProps> = ({
@@ -24,6 +27,9 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   onCloseSession,
   onClaimRefund,
   onRefreshClaimable,
+  onOpenSession,
+  onSignCreatorClose,
+  creatorCloseSigned,
 }) => {
   const [minutes, setMinutes] = useState('10');
   const [envioTelemetry, setEnvioTelemetry] = useState<EnvioTelemetry | null>(null);
@@ -45,10 +51,16 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
     void refreshEnvio();
   }, [onRefreshClaimable, refreshEnvio]);
 
+  const pendingUnits = Math.max(0, session.cumulativeUnits - session.settledUnits);
+  const depositNum = Number(session.initialDepositUSDC) || 0;
+  const billedNum = Number(session.unredeemedUSDC) || 0;
+  const computedRefund = Math.max(0, depositNum - billedNum).toFixed(6);
+  const hasRefundClaimable = Number(session.claimableUSDC) > 0 || (session.status === 'closed' && session.refundStatus === 'allocated' && Number(session.refundUSDC) > 0);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between pb-4 border-b border-[#1f1912]">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#1f1912] gap-4">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
             <Receipt className="w-5 h-5 text-[#d89a4e]" />
@@ -59,24 +71,63 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           </p>
         </div>
 
-        {session.status === 'active' && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {session.status === 'inactive' && onOpenSession && (
             <button
-              onClick={onCheckpoint}
-              className="px-3.5 py-1.5 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-2"
+              onClick={onOpenSession}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#d89a4e] to-[#b3752c] text-black text-xs font-bold shadow-lg hover:brightness-110 transition-all cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Checkpoint</span>
+              Open Payment Session
             </button>
+          )}
+
+          {session.status === 'closed' && onOpenSession && (
             <button
-              onClick={onCloseSession}
-              className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2"
+              onClick={onOpenSession}
+              className="px-4 py-2 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold cursor-pointer transition-colors"
             >
-              <Lock className="w-3.5 h-3.5" />
-              <span>Close Session</span>
+              New Payment Session
             </button>
-          </div>
-        )}
+          )}
+
+          {session.status === 'active' && (
+            <>
+              <button
+                onClick={onCheckpoint}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all ${
+                  pendingUnits > 0
+                    ? 'bg-[#2b1f13] hover:bg-[#382818] border border-[#7d5628] text-[#e8b56f] shadow-[0_0_12px_rgba(216,154,78,0.2)]'
+                    : 'bg-[#18130e] hover:bg-[#201912] border border-[#2b2116] text-neutral-400'
+                }`}
+                title={pendingUnits > 0 ? `${pendingUnits} units waiting for checkpoint settlement` : 'Settlement units up to date'}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${pendingUnits > 0 ? 'text-[#d89a4e]' : ''}`} />
+                <span>
+                  {pendingUnits > 0 ? `Checkpoint (${pendingUnits} pending)` : `Checkpointed (${session.settledUnits}u)`}
+                </span>
+              </button>
+
+              {!session.isSimulated && !creatorCloseSigned && onSignCreatorClose && (
+                <button
+                  onClick={onSignCreatorClose}
+                  className="px-3 py-1.5 rounded-xl bg-[#1d1610] hover:bg-[#271d15] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  title="Step 1: Sign Creator Close Ack before cooperative settlement"
+                >
+                  <span>Sign Creator Close Ack</span>
+                </button>
+              )}
+
+              <button
+                onClick={onCloseSession}
+                className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+                title="Settle remaining balance and close payment channel cooperatively"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Close Session</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -86,7 +137,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           <div className="text-base sm:text-lg font-bold text-white mt-1 capitalize flex items-center gap-2 truncate">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
-                session.status === 'active' ? 'bg-emerald-400' : 'bg-neutral-500'
+                session.status === 'active' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : session.status === 'closed' ? 'bg-amber-400' : 'bg-neutral-500'
               }`}
             />
             <span>{session.status}</span>
@@ -116,27 +167,69 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
 
         <div className="p-3.5 sm:p-4 rounded-xl bg-[#13100c] border border-[#241d16] min-w-0">
           <div className="text-xs font-medium text-neutral-400 truncate">Refund Allocation</div>
-          <div className="text-base sm:text-lg font-bold text-emerald-300 font-mono mt-1 truncate">{session.refundUSDC} USDC</div>
+          <div className="text-base sm:text-lg font-bold text-emerald-300 font-mono mt-1 truncate">
+            {session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC
+          </div>
           <div className="text-[10px] text-neutral-500 mt-1 truncate">{session.refundStatus}</div>
         </div>
       </div>
 
-      <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16] flex flex-wrap items-end gap-4">
-        <div>
-          <div className="text-xs text-neutral-400 mb-1">Cost calculator</div>
-          <label className="text-xs text-neutral-500">Minutes watched</label>
-          <input value={minutes} onChange={(e) => setMinutes(e.target.value)} type="number" min="0" className="block mt-1 w-28 rounded-lg bg-[#080705] border border-[#3b2a1a] px-2 py-1 text-sm text-white" />
+      {/* Escrow Deposit & Refund Ledger Banner */}
+      <div className="p-4 rounded-2xl bg-[#13100c] border border-[#241d16] space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-[#1b150f]">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-bold text-white uppercase tracking-wider">
+              Settlement Escrow & Refund Management
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onRefreshClaimable}
+              className="px-2.5 py-1 rounded-lg text-xs bg-[#1a140e] hover:bg-[#251c14] border border-[#3b2a1a] text-[#e8b56f] flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Refresh Refund Status</span>
+            </button>
+          </div>
         </div>
-        <div className="text-sm text-neutral-300">StreamPay: <strong className="text-[#e8b56f]">{(Math.max(0, Number(minutes) || 0) * 60 * ratePerSecond).toFixed(4)} USDC</strong></div>
-        <div className="text-sm text-neutral-500">Subscription example: <strong className="text-neutral-300">$22.99/month</strong></div>
-      </div>
 
-      {Number(session.claimableUSDC) > 0 && (
-        <div className="p-4 rounded-xl border border-emerald-900/60 bg-emerald-950/20 flex items-center justify-between gap-4">
-          <div><div className="text-sm font-semibold text-emerald-200">Claimable refund</div><div className="text-xs text-emerald-300/70">{session.claimableUSDC} USDC is held by the settlement contract.</div></div>
-          <button onClick={onClaimRefund} className="px-4 py-2 rounded-lg bg-emerald-400 text-black text-xs font-bold">Claim refund</button>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Initial Escrow Deposit</div>
+            <div className="font-mono text-white text-sm font-bold mt-0.5">{session.initialDepositUSDC || '0.0000'} USDC</div>
+          </div>
+          <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Current Billed Streaming</div>
+            <div className="font-mono text-[#e8b56f] text-sm font-bold mt-0.5">{session.unredeemedUSDC} USDC</div>
+          </div>
+          <div className="p-2.5 rounded-xl bg-[#0b0907] border border-[#1e1710]">
+            <div className="text-[10px] text-neutral-500 uppercase font-semibold">Allocated Refund Balance</div>
+            <div className="font-mono text-emerald-300 text-sm font-bold mt-0.5">
+              {session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC
+            </div>
+          </div>
         </div>
-      )}
+
+        {hasRefundClaimable && (
+          <div className="mt-3 p-3.5 rounded-xl border border-emerald-900/70 bg-emerald-950/30 flex items-center justify-between gap-4">
+            <div>
+              <div className="text-xs font-bold text-emerald-200">
+                Refund Ready to Claim
+              </div>
+              <div className="text-[11px] text-emerald-300/80 mt-0.5">
+                {Number(session.claimableUSDC) > 0 ? session.claimableUSDC : (session.refundUSDC !== '0' ? session.refundUSDC : computedRefund)} USDC available for withdrawal from escrow.
+              </div>
+            </div>
+            <button
+              onClick={onClaimRefund}
+              className="px-4 py-2 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold shadow-md cursor-pointer transition-colors whitespace-nowrap"
+            >
+              Claim Refund
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Contract & Token Specs */}
       <div className="p-4 rounded-xl bg-[#13100c] border border-[#241d16] space-y-2 text-xs">

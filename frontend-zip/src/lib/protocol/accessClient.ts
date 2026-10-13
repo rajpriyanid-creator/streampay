@@ -105,9 +105,11 @@ export class AccessServiceClient {
     return { data, byteLength: data.byteLength, mimeType: res.headers.get('content-type') || 'video/mp2t' };
   }
 
-  async checkpointSync(sessionId: `0x${string}`): Promise<CheckpointSyncResponse> {
+  async checkpointSync(sessionId: `0x${string}`, settledUnits?: number): Promise<CheckpointSyncResponse> {
     const res = await fetch(`${this.baseUrl}/api/session/checkpoint-sync`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, settledUnits }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.success) throw apiError(res.status, data);

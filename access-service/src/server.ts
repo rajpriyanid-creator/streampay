@@ -686,21 +686,26 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
 
 // ─── Checkpoint Notification / Sync Route ─────────────────────────
 app.post('/api/session/checkpoint-sync', async (req: Request, res: Response) => {
-  const { sessionId } = req.body;
+  const { sessionId, settledUnits } = req.body;
   if (!sessionId) {
     res.status(400).json({ error: 'Missing sessionId' });
     return;
   }
   try {
-    if (config.SETTLEMENT_ADDRESS) {
-      const s = await readSession(sessionId as Hex, { fresh: true });
-      if (s) {
-        await reservationLedger.onCheckpoint(sessionId, s.settledUnits);
-        res.json({ success: true, settledUnits: s.settledUnits.toString() });
-        return;
-      }
+    if (activeMode === 'onchain' && activeSettlement) {
+      try {
+        const s = await readSession(sessionId as Hex, { fresh: true });
+        if (s) {
+          await reservationLedger.onCheckpoint(sessionId, s.settledUnits);
+          res.json({ success: true, settledUnits: s.settledUnits.toString() });
+          return;
+        }
+      } catch {}
     }
-    res.status(404).json({ error: 'Session not found' });
+    // Simulation / local / off-chain checkpoint fallback:
+    const units = settledUnits !== undefined ? BigInt(settledUnits) : 0n;
+    await reservationLedger.onCheckpoint(sessionId, units);
+    res.json({ success: true, settledUnits: units.toString() });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

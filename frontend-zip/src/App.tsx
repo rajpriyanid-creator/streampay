@@ -379,6 +379,9 @@ export default function App() {
               onCloseSession={handleCloseSession}
               onClaimRefund={handleClaimRefund}
               onRefreshClaimable={handleRefreshClaimable}
+              onOpenSession={() => setIsOpenSessionModal(true)}
+              onSignCreatorClose={handleSignCreatorClose}
+              creatorCloseSigned={creatorState.closeAckSigned}
             />
           )}
 
@@ -392,6 +395,8 @@ export default function App() {
               onCloseSession={handleCloseSession}
               onClaimRefund={handleClaimRefund}
               onRefreshClaimable={handleRefreshClaimable}
+              onSignCreatorClose={handleSignCreatorClose}
+              creatorCloseSigned={creatorState.closeAckSigned}
             />
           )}
 

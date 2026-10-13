@@ -15,6 +15,8 @@ interface SessionViewProps {
   onCloseSession: () => void;
   onClaimRefund: () => void;
   onRefreshClaimable: () => void;
+  onSignCreatorClose?: () => void;
+  creatorCloseSigned?: boolean;
 }
 
 export const SessionView: React.FC<SessionViewProps> = ({
@@ -25,7 +27,11 @@ export const SessionView: React.FC<SessionViewProps> = ({
   onCloseSession,
   onClaimRefund,
   onRefreshClaimable,
+  onSignCreatorClose,
+  creatorCloseSigned,
 }) => {
+  const pendingUnits = Math.max(0, session.cumulativeUnits - session.settledUnits);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -54,11 +60,29 @@ export const SessionView: React.FC<SessionViewProps> = ({
             <>
               <button
                 onClick={onCheckpoint}
-                className="px-3.5 py-1.5 rounded-xl bg-[#241a12] hover:bg-[#302217] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all ${
+                  pendingUnits > 0
+                    ? 'bg-[#2b1f13] hover:bg-[#382818] border border-[#7d5628] text-[#e8b56f] shadow-[0_0_12px_rgba(216,154,78,0.2)]'
+                    : 'bg-[#18130e] hover:bg-[#201912] border border-[#2b2116] text-neutral-400'
+                }`}
+                title={pendingUnits > 0 ? `${pendingUnits} units waiting for checkpoint settlement` : 'Settlement units up to date'}
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Checkpoint Session</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${pendingUnits > 0 ? 'text-[#d89a4e]' : ''}`} />
+                <span>
+                  {pendingUnits > 0 ? `Checkpoint (${pendingUnits} pending)` : `Checkpointed (${session.settledUnits}u)`}
+                </span>
               </button>
+
+              {!session.isSimulated && !creatorCloseSigned && onSignCreatorClose && (
+                <button
+                  onClick={onSignCreatorClose}
+                  className="px-3 py-1.5 rounded-xl bg-[#1d1610] hover:bg-[#271d15] border border-[#523d24] text-[#e8b56f] text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  title="Step 1: Sign Creator Close Ack before cooperative settlement"
+                >
+                  <span>Sign Creator Close Ack</span>
+                </button>
+              )}
+
               <button
                 onClick={onCloseSession}
                 className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
