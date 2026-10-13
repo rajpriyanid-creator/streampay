@@ -310,14 +310,15 @@ export class ProtocolLifecycleManager {
     return this.walletClient;
   }
 
-  private async refreshBalance(address: Address): Promise<void> {
-    if (this.network === 'testnet' && address) {
+  private async refreshBalance(address?: Address | ''): Promise<void> {
+    const target = address || this.wallet.address;
+    if (this.network === 'testnet' && target) {
       try {
         const balance = await createPublicClient({ transport: http(rpcFor(this.network)) }).readContract({
           address: MONAD_PAYMENT_TOKEN,
           abi: [{ type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] }] as const,
           functionName: 'balanceOf',
-          args: [address],
+          args: [target as Address],
         });
         this.wallet.balanceUSDC = (Number(balance) / 1_000_000).toFixed(6);
       } catch {
@@ -698,7 +699,7 @@ export class ProtocolLifecycleManager {
     this.session.settledUnits = this.session.cumulativeUnits;
 
     // Check on-chain balance and claimable amount
-    await this.refreshBalance(this.wallet.address);
+    if (this.wallet.address) await this.refreshBalance(this.wallet.address);
     const claimableAmount = await this.refreshClaimableRefund();
     if (Number(claimableAmount) > 0) {
       this.session.refundStatus = 'claimable';
@@ -756,7 +757,7 @@ export class ProtocolLifecycleManager {
       account: requireAddress(this.wallet.address, 'Payer wallet'),
     });
     if (claimableOnChain === 0n) {
-      await this.refreshBalance(this.wallet.address);
+      if (this.wallet.address) await this.refreshBalance(this.wallet.address);
       this.session.claimableUSDC = '0';
       if (Number(this.session.refundUSDC) > 0) {
         this.session.refundStatus = 'credited';
@@ -774,7 +775,7 @@ export class ProtocolLifecycleManager {
     this.session.claimableUSDC = '0';
     this.session.refundStatus = 'claimed';
     this.session.lastTxHash = tx;
-    await this.refreshBalance(this.wallet.address);
+    if (this.wallet.address) await this.refreshBalance(this.wallet.address);
     this.addEvent('Claimable refund claimed', tx);
     this.notify();
     return tx;
