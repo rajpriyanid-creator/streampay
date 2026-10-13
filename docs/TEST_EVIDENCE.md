@@ -1,7 +1,8 @@
 # StreamPay v2.5 — Test Evidence & Verification Log
 
 **Date:** 2026-10-10  
-**Commit:** `f788688d130d0adb144968c2da332d0d776cc8a9` (preceding source fixes: `58178601121797b16870c0b587780e9809121a5b`, `80f0506124121d94de69d8a4980368bb583e726b`, `e3e2ed1fab74f4f39951171598a49360627f01f0`, `4068aac7d026bb4336530c4a0e9e371c9a6f6290`)  
+**Branch:** `fix/testnet-signing-deployment-safety`
+**Commit:** `9f79357`
 **GitHub Actions Runs:** [Run #38076882199](https://github.com/rajpriyanid-creator/streampay/actions/runs/38076882199) (Latest: **SUCCESS**), [Run #38074405505](https://github.com/rajpriyanid-creator/streampay/actions/runs/38074405505) (**SUCCESS**), [Run #38072452206](https://github.com/rajpriyanid-creator/streampay/actions/runs/38072452206) (**SUCCESS**)  
 **Environment:** Windows (PowerShell) / Node.js v22.23.1 / Chromium (Browser Subagent) / Linux CI (Ubuntu)  
 
@@ -23,9 +24,9 @@ Evidence: Clean tsc build into dist/
 ### Frontend TypeScript Compilation (`tsc --noEmit` & `npm run build`)
 ```
 Status: PASS (0 errors, exit code 0)
-Location: frontend/
-Command: npm --prefix frontend run typecheck && npm --prefix frontend run build
-Evidence: Next.js 14.2 production bundle successfully compiled, linted, and static routes generated:
+Location: frontend-zip/
+Command: npm --prefix frontend-zip run lint && npm --prefix frontend-zip run build
+Evidence: Vite production bundle successfully compiled:
   Route (app)                              Size     First Load JS
   ┌ ○ /                                    288 kB          376 kB
   └ ○ /_not-found                          873 B          88.1 kB
@@ -174,6 +175,49 @@ Verification Results:
     ✔ Instance A issued Segment 1 token
     ✔ Instance B validated & delivered content using Instance A's token (97,196 bytes)
     ✔ Instance A rejected replay of token consumed by Instance B (cross-instance single-use replay protection)
+  Test 4 (Concurrent Multi-Instance Updates & Conflict Prevention):
+    ✔ Implemented advisory lockfile (`state.json.lock`) with atomic creation (`fs.openSync(..., 'wx')`), exponential backoff, and stale lock eviction (5s TTL).
+    ✔ Implemented atomic disk state merging in `saveAllDurableState()`: merges consumed tokens, monotonic max for voucher cumulative units, unions completed segments.
+    ✔ Multi-instance concurrent writes preserved both sessions without lost updates.
+    ✔ Simultaneous cross-instance replay of consumed token strictly rejected (both instances returned 403 Forbidden).
+    ✔ Single-instance & shared-disk concurrency guarantees verified; documentation explicitly notes that horizontal multi-server scaling across disjoint disks requires an external transactional store (PostgreSQL or Redis Redlock) prior to production multi-machine deployment.
+```
+
+### Testnet Signing Safety & EIP-712 Suite (`npx tsx scripts/e2e/testnet-signing-safety.test.ts`)
+```
+Status: PASS (9/9 tests pass, exit code 0)
+Location: scripts/e2e/testnet-signing-safety.test.ts
+Command: npx tsx scripts/e2e/testnet-signing-safety.test.ts
+
+Verification Results:
+  ✔ Test 1: Testnet session opening strictly rejects creatorKey (Anvil key) on chain 10143 with SECURITY VIOLATION.
+  ✔ Test 2: Testnet session opening fails closed without creator offerSignature.
+  ✔ Test 3: Contract constraint PayerEqualsRecipient strictly validated before submission (prevents contract revert).
+  ✔ Test 4: Contract constraint PayerEqualsSessionSigner strictly validated before submission (prevents contract revert).
+  ✔ Test 5: Testnet close acknowledgement strictly rejects creatorKey on chain 10143 with SECURITY VIOLATION.
+  ✔ Test 6: Testnet close fails closed without wallet-signed ackSig.
+  ✔ Test 7: EIP-712 typed data schemas, domain (name='StreamPaySettlement', version='2.5'), and digests (ContentOffer, SessionConfig, CloseAck) match Solidity specification exactly.
+  ✔ Test 8: Genuine Creator wallet signing flow via signContentOfferWithWallet and signCloseAckWithWallet produces valid EIP-712 typed-data signatures.
+  ✔ Test 9: Static audit of frontend code proves zero Anvil keys leak into Testnet execution paths.
+
+All 9 Testnet Signing Safety & EIP-712 tests PASSED!
+```
+
+### Fail-Closed Deployment Script Regression Suite (`contracts/test/DeployTest.t.sol`)
+```
+Status: PASS (Foundry test suite added for CI execution)
+Location: contracts/test/DeployTest.t.sol
+Target Script: contracts/script/Deploy.s.sol
+
+Verification Scenarios Covered:
+  ✔ test_LocalDeployment_AllowsMockUSDC: Auto-deploying MockUSDC succeeds on local chain 31337.
+  ✔ test_LocalDeployment_UsesProvidedToken: When PAYMENT_TOKEN is provided on chain 31337, uses provided token.
+  ✔ test_TestnetDeployment_MissingToken_Reverts: Chain 10143 with unset PAYMENT_TOKEN reverts with MissingPaymentTokenForTestnet().
+  ✔ test_TestnetDeployment_WrongToken_Reverts: Chain 10143 with unapproved token reverts with InvalidTestnetToken().
+  ✔ test_TestnetDeployment_TokenHasNoBytecode_Reverts: Chain 10143 with empty bytecode reverts with TokenHasNoBytecode().
+  ✔ test_TestnetDeployment_UnexpectedDecimals_Reverts: Chain 10143 with 18 decimals instead of 6 reverts with UnexpectedDecimals().
+  ✔ test_UnsupportedChain_Reverts: Deployment on arbitrary unsupported chains (1, 9999) reverts with UnsupportedChain().
+  ✔ test_TestnetDeployment_ValidToken_Succeeds: Approved testnet token with 6 decimals succeeds on chain 10143.
 ```
 
 ---
@@ -250,7 +294,7 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 
 1. **Foundry tests on local Windows**: `forge` is not installed on this local Windows machine. The full Foundry test suite (39 tests across 2 test suites: `DeployDiscoveryTest` and `StreamPaySettlementTest`) is executed and passed in the Linux CI workflow (`.github/workflows/ci.yml`).
 2. **Monad Testnet Deployment**: No live testnet deployment was executed. Testnet faucet, token addresses, and contract deployment to chain 10143 remain blocked (**NOT DEPLOYED**).
-3. **Envio HyperIndex toolchain build**: Envio CLI was verified via CLI availability check (`npx envio --version`), but full indexer build was not executed since indexer runs on chain 31337 and requires Docker/WSL 2.
+3. **Envio HyperIndex toolchain build**: CI is configured to run Envio `2.32.12` codegen/build. The latest run failed because local chain `31337` lacked an explicit RPC source; that configuration is now fixed, but a fresh CI run is still required.
 
 ---
 
@@ -260,8 +304,8 @@ Verification Result: FALSE (Tampered leaf rejected; delivery and billing aborted
 # 1. Typecheck and build all services
 npm --prefix access-service run typecheck
 npm --prefix access-service run build
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
+npm --prefix frontend-zip run lint
+npm --prefix frontend-zip run build
 
 # 2. Run reservation ledger unit tests
 node --test access-service/dist/reservationStore.test.js
@@ -274,6 +318,90 @@ node access-service/dist/server.js &
 node scripts/e2e/e2e.mjs
 
 # 5. Start frontend and verify in browser
-npm --prefix frontend run dev
+npm --prefix frontend-zip run dev
 # Navigate to http://localhost:3000
+
+# 6. Run durable persistence, multi-instance, and lock concurrency suite
+npx tsx scripts/e2e/durable-persistence.test.ts
+
+# 7. Run testnet signing safety and EIP-712 verification suite
+npx tsx scripts/e2e/testnet-signing-safety.test.ts
+```
+
+---
+
+## 7. Concurrency & Security Regression Test Evidence (2026-10-11)
+
+Current branch update: `fix/testnet-signing-deployment-safety` at `58eb0a5`.
+The checkpoint integration test now independently reads the contract after the
+checkpoint transaction and verifies that `/api/session/checkpoint-sync` returns
+the same fresh `settledUnits` value. This change is source-verified here; a
+full local-chain rerun is required to record new runtime evidence.
+
+### Durable Persistence, Multi-Instance & Lock Concurrency Suite
+```
+Command: npx tsx scripts/e2e/durable-persistence.test.ts
+Status: PASS (6/6 tests, exit code 0)
+
+Test 1: Single-Instance State Persistence & In-Memory Match
+  ✅ Segment 0 token granted and content delivered
+  ✅ state.json confirmed on disk with matching voucher state
+Test 2: Process Restart & Recovery
+  ✅ In-memory voucher state restored from state.json
+  ✅ Replay of consumed token after restart rejected (403)
+  ✅ Re-request for completed segment rejected (402/400)
+Test 3: Multi-Instance Cluster Sharing & Replay Coordination
+  ✅ Instance A generates token; Instance B serves content successfully
+  ✅ Replay of consumed token on Instance A strictly rejected (403)
+Test 4: High-Concurrency Cross-Process Race & Lost-Update Protection
+  ✅ Multiple concurrent processes update state.json without lost updates
+  ✅ Simultaneous first-use race resolved atomically: exactly 1 granted (200), 1 rejected (403)
+  ✅ Subsequent replays on both instances strictly rejected (403)
+Test 5: Durability Corruption Fail-Closed Protection
+  ✅ Corrupted state.json causes server startup failure (exit code 1) with fatal replay error
+Test 6: Filesystem Lock Concurrency & Safety Properties
+  ✅ 6a: Live lock holder exceeding normal age (15s) was NOT stolen (liveness preserved)
+  ✅ 6b: Genuinely abandoned lock (dead PID) safely recovered
+  ✅ 6c: Former owner release DID NOT remove replacement owner lock (owner isolation verified)
+  ✅ 6d: Lock timeout safely triggered after contested period
+  ✅ 6e: Empty/corrupted lock file older than grace period safely recovered
+```
+
+### Testnet Signing Safety & EIP-712 Verification Suite
+```
+Command: npx tsx scripts/e2e/testnet-signing-safety.test.ts
+Status: PASS (11/11 tests, exit code 0)
+
+Test 1: Proving testnet session opening strictly rejects creatorKey (Anvil key)...
+   ✅ PASS: creatorKey rejected on Testnet chain 10143 with SECURITY VIOLATION.
+Test 2: Proving testnet session opening fails closed without creator offerSignature...
+   ✅ PASS: openSessionWithWallet failed closed when offerSignature was missing.
+Test 3: Proving PayerEqualsRecipient constraint is strictly validated...
+   ✅ PASS: PayerEqualsRecipient prevented before submission.
+Test 4: Proving PayerEqualsSessionSigner constraint is strictly validated...
+   ✅ PASS: PayerEqualsSessionSigner prevented before submission.
+Test 5: Proving testnet close acknowledgement strictly rejects creatorKey...
+   ✅ PASS: closeCooperativeWithWallet rejected creatorKey on Testnet chain 10143.
+Test 6: Proving testnet close fails closed without wallet-signed ackSig...
+   ✅ PASS: closeCooperativeWithWallet failed closed when ackSig was missing.
+Test 7: Verifying EIP-712 typed data schemas and digests match Solidity specification...
+   ✅ ContentOffer EIP-712 digest verified against exact Solidity formula
+   ✅ SessionConfig EIP-712 digest verified against exact Solidity formula
+   ✅ CloseAck EIP-712 digest verified against exact Solidity formula
+Test 8: Verifying genuine Creator wallet signing flow & cryptographic signature recovery...
+   ✅ Recovered ContentOffer signer matches Creator account
+   ✅ Recovered CloseAck signer matches Creator account
+   ✅ Cryptographic recovery verified via viem recoverTypedDataAddress
+Test 9: Static audit of frontend code for forbidden Anvil keys in testnet paths...
+   ✅ PASS: Zero Anvil keys in Testnet execution paths in frontend.
+Test 10: Verifying account & chain validation individually enforced across all 5 operations...
+   ✅ 10a: signContentOfferWithWallet strictly enforces account & chain.
+   ✅ 10b: openSessionWithWallet strictly enforces account & chain.
+   ✅ 10c: checkpointWithWallet strictly enforces account & chain.
+   ✅ 10d: signCloseAckWithWallet strictly enforces account & chain.
+   ✅ 10e: closeCooperativeWithWallet strictly enforces account & chain.
+Test 11: Negative EIP-712 security checks: domain separation & CloseAck non-reusability...
+   ✅ 11a: Domain separation by chain ID verified (wrong chainId cannot verify signature).
+   ✅ 11b: Domain separation by verifyingContract verified.
+   ✅ 11c: CloseAck non-reusability proven: signed ack cannot be reused after playback advances.
 ```

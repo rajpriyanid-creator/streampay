@@ -2,10 +2,12 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { keccak256, encodeAbiParameters, parseAbiParameters, type Hex } from 'viem';
+import { config } from './config';
 
-export const UNITS_PER_SEGMENT = 2n;
-export const SEGMENT_DURATION_SEC = 2;
-export const UNIT_PRICE = 500n; // 0.0005 USDC per unit (6 decimals). 1 unit = 1 second.
+export const UNITS_PER_SEGMENT = 5n;
+export const SEGMENT_DURATION_SEC = 5;
+export const UNIT_PRICE = 500n; // Existing canonical demo streams: 0.0005 USDC per unit.
+export const REAL_DEMO_UNIT_PRICE = 100n; // Real-video demo: 0.0001 USDC per unit.
 
 export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
   Buffer.from('StreamPaySegmentLeaf(uint32 schemaVersion,bytes32 contentIdHash,uint32 segmentIndex,uint32 durationUnits,bytes32 renditionIdHash,bytes32 segmentSha256)')
@@ -13,6 +15,7 @@ export const SEGMENT_LEAF_TYPEHASH: Hex = keccak256(
 
 export const CANONICAL_PRICING_POLICY_STRING = 'fixed-rate-0.0005-usdc-per-second-unit';
 export const CANONICAL_PRICING_POLICY_HASH: Hex = '0x76422f1e290b9f7982658421843336df3a5b54190454061ecfa6748f5987c500';
+export const REAL_DEMO_PRICING_POLICY_HASH: Hex = '0xa1260b9017cc00b80f61903c15d8521c2732b58901a984429a5fb6b174e48f64';
 
 export function computeSegmentLeaf(params: {
   schemaVersion?: number;
@@ -98,21 +101,27 @@ export function computeSegmentSha256(bytes: Buffer): Hex {
 // Memory cache for segment buffers
 const segmentBytesStore = new Map<string, Buffer>();
 
-function loadSegmentBytesFromDisk(streamId: string, segmentIndex: number): Buffer {
+export function getSegmentFilePath(streamId: string, segmentIndex: number): string {
   const candidatePaths = [
+    path.join(__dirname, '../media', streamId, `segment_${segmentIndex}.mp4`),
     path.join(__dirname, '../media', streamId, `segment_${segmentIndex}.ts`),
+    path.join(__dirname, '../../fixtures/media', `segment_${segmentIndex}.mp4`),
     path.join(__dirname, '../../fixtures/media', `segment_${segmentIndex}.ts`),
+    path.join(process.cwd(), 'media', streamId, `segment_${segmentIndex}.mp4`),
     path.join(process.cwd(), 'media', streamId, `segment_${segmentIndex}.ts`),
+    path.join(process.cwd(), 'fixtures/media', `segment_${segmentIndex}.mp4`),
     path.join(process.cwd(), 'fixtures/media', `segment_${segmentIndex}.ts`),
   ];
 
   for (const p of candidatePaths) {
-    if (fs.existsSync(p)) {
-      return fs.readFileSync(p);
-    }
+    if (fs.existsSync(p)) return p;
   }
 
-  throw new Error(`Segment file segment_${segmentIndex}.ts not found on disk for stream ${streamId}`);
+  throw new Error(`Segment file segment_${segmentIndex}.mp4 or .ts not found on disk for stream ${streamId}`);
+}
+
+function loadSegmentBytesFromDisk(streamId: string, segmentIndex: number): Buffer {
+  return fs.readFileSync(getSegmentFilePath(streamId, segmentIndex));
 }
 
 export function getSegmentBytes(streamId: string, segmentIndex: number): Buffer {
@@ -127,6 +136,8 @@ const manifestStore = new Map<string, any>();
 
 export function createCanonicalManifest(streamId: string) {
   const contentIdHash = keccak256(Buffer.from(`stream-content-${streamId}`));
+  const unitPrice = streamId === 'real-demo' ? REAL_DEMO_UNIT_PRICE : UNIT_PRICE;
+  const pricingPolicyHash = streamId === 'real-demo' ? REAL_DEMO_PRICING_POLICY_HASH : CANONICAL_PRICING_POLICY_HASH;
   const zeroHash = ('0x' + '00'.repeat(32)) as Hex;
 
   // Scan disk to discover available segment files
@@ -147,8 +158,9 @@ export function createCanonicalManifest(streamId: string) {
 
   let segmentCount = 5;
   if (mediaDir) {
-    const files = fs.readdirSync(mediaDir).filter(f => /^segment_\d+\.ts$/i.test(f));
-    if (files.length > 0) segmentCount = files.length;
+    const files = fs.readdirSync(mediaDir).filter(f => /^segment_\d+\.(?:ts|mp4)$/i.test(f));
+    const segmentIndexes = new Set(files.map((file) => Number(file.match(/^segment_(\d+)\./i)?.[1])).filter(Number.isInteger));
+    if (segmentIndexes.size > 0) segmentCount = segmentIndexes.size;
   }
 
   const rawSegments = [];
@@ -162,7 +174,7 @@ export function createCanonicalManifest(streamId: string) {
     rawSegments.push({
       segmentIndex: i,
       durationUnits: SEGMENT_DURATION_SEC,
-      costUSDC: (UNITS_PER_SEGMENT * UNIT_PRICE).toString(),
+      costUSDC: (UNITS_PER_SEGMENT * unitPrice).toString(),
       cumulativeUnits: cum.toString(),
       contentIdHash,
       renditionIdHash: zeroHash,
@@ -192,13 +204,13 @@ export function createCanonicalManifest(streamId: string) {
   return {
     schemaVersion: 1,
     streamId,
-    title: 'Monad StreamPay HD Demo Video',
+    title: streamId === 'real-demo' ? 'Real Video Test — RuralFlowAI' : 'Monad StreamPay HD Demo Video',
     totalSegments: segments.length,
     totalDurationSec: segments.length * SEGMENT_DURATION_SEC,
-    unitPriceUSDC: '0.0005',
-    unitPrice: UNIT_PRICE.toString(),
+    unitPriceUSDC: streamId === 'real-demo' ? '0.0001' : '0.0005',
+    unitPrice: unitPrice.toString(),
     contentIdHash,
-    pricingPolicyHash: CANONICAL_PRICING_POLICY_HASH,
+    pricingPolicyHash,
     renditionIdHash: zeroHash,
     manifestRoot,
     merkleRoot: manifestRoot,
@@ -225,5 +237,5 @@ export function getSegment(streamId: string, index: number) {
 }
 
 export function getStreamIdList(): string[] {
-  return ['monad-keynote-hd', 'demo-stream'];
+  return config.streamIds.filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
 }

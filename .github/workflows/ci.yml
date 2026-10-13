@@ -2,11 +2,25 @@ name: StreamPay CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'fix/**', 'feat/**' ]
   pull_request:
     branches: [ main ]
 
 jobs:
+  security-audit:
+    name: Gitleaks Secret Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   test-and-build:
     name: Core Contracts, Services & E2E Lifecycle
     runs-on: ubuntu-latest
@@ -29,7 +43,7 @@ jobs:
         run: npm ci --prefix access-service
 
       - name: Install Frontend Dependencies
-        run: npm ci --prefix frontend
+        run: npm ci --prefix frontend-zip
 
       # TypeScript checks
       - name: TypeScript Check Access Service
@@ -39,7 +53,7 @@ jobs:
 
       - name: TypeScript Check Frontend
         run: |
-          cd frontend
+          cd frontend-zip
           npx tsc --noEmit
 
       # Production builds
@@ -47,7 +61,11 @@ jobs:
         run: npm run build --prefix access-service
 
       - name: Build Frontend (Production)
-        run: npm run build --prefix frontend
+        run: npm run build --prefix frontend-zip
+
+      # Unit Tests
+      - name: Run Frontend Protocol Unit Tests
+        run: npm test --prefix frontend-zip
 
       # Generate canonical manifest
       - name: Generate Canonical Merkle Manifest
@@ -95,13 +113,13 @@ jobs:
           ANVIL_PID=$!
           sleep 3
 
-          echo "Deploying StreamPaySettlement & MockUSDC..."
           cd contracts
+          # Public Anvil test key. Never use on a real network.
           DEPLOY_OUT=$(forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 --broadcast --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 2>&1)
           echo "$DEPLOY_OUT"
-          SETTLEMENT=$(echo "$DEPLOY_OUT" | grep -oP 'Settlement: \K0x[0-9a-fA-F]+' || true)
-          TOKEN=$(echo "$DEPLOY_OUT" | grep -oP 'Token: \K0x[0-9a-fA-F]+' || true)
           cd ..
+          SETTLEMENT=$(node -e "try { console.log(require('./contracts/deployment.json').settlementContract); } catch(e) { process.exit(1); }")
+          TOKEN=$(node -e "try { console.log(require('./contracts/deployment.json').paymentToken.address); } catch(e) { process.exit(1); }")
           cp contracts/deployment.json manifests/local.json 2>/dev/null || true
 
           if [ -z "$SETTLEMENT" ]; then
@@ -163,6 +181,22 @@ jobs:
           echo "Running Durable Persistence, Restart Recovery & Dual-Instance Suite..."
           npx tsx scripts/e2e/durable-persistence.test.ts
 
+          echo "Running Testnet Signing Safety & EIP-712 Verification Suite..."
+          npx tsx scripts/e2e/testnet-signing-safety.test.ts
+
+          echo "Running Failure Demo Script..."
+          npx tsx scripts/failure-demo.ts
+
+      # Active frontend smoke check
+      - name: Run Vite Frontend Smoke Check
+        run: |
+          npm run dev --prefix frontend-zip -- --host 127.0.0.1 --port 3000 > /tmp/frontend.log 2>&1 &
+          FE_PID=$!
+          sleep 5
+          curl --fail --silent --show-error http://127.0.0.1:3000/ > /tmp/frontend.html
+          grep -q "StreamPay" /tmp/frontend.html
+          kill $FE_PID || true
+
       # Upload test artifacts
       - name: Upload Test Results
         if: always()
@@ -175,7 +209,7 @@ jobs:
           retention-days: 7
 
   envio-indexer:
-    name: Envio CLI Availability Check
+    name: Envio Indexer Codegen & Build
     runs-on: ubuntu-latest
 
     steps:
@@ -191,12 +225,27 @@ jobs:
         with:
           version: 9
 
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Build Contracts for ABI
+        run: |
+          cd contracts
+          forge install foundry-rs/forge-std --no-commit 2>/dev/null || true
+          forge install OpenZeppelin/openzeppelin-contracts --no-commit 2>/dev/null || true
+          forge build
+          cd ..
+          mkdir -p indexer/abis
+          node -e "const fs = require('fs'); const artifact = JSON.parse(fs.readFileSync('contracts/out/StreamPaySettlement.sol/StreamPaySettlement.json', 'utf8')); fs.writeFileSync('indexer/abis/StreamPaySettlement.json', JSON.stringify(artifact.abi, null, 2));"
+
       - name: Install Indexer Dependencies
         run: |
           cd indexer
           pnpm install || npm install
 
-      - name: Verify Envio CLI Availability
+      - name: Run Envio codegen and build
         run: |
           cd indexer
-          npx envio --version
+          pnpm run build

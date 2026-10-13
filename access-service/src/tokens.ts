@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { type Hex } from 'viem';
 import { config } from './config';
-import { getOrInitTokenSecret, saveAllDurableState, syncFromDisk } from './durableStore';
+import { getOrInitTokenSecret, saveAllDurableState, syncFromDisk, tryAtomicConsumeToken } from './durableStore';
 
 const SECRET = getOrInitTokenSecret();
 
@@ -64,29 +64,14 @@ export function verifyToken(token: string, nowMs = Date.now()): TokenPayload | n
 }
 
 /**
- * Mark a token as consumed (single-use enforcement).
- */
-function markConsumed(token: string, nowMs = Date.now()): void {
-  const [, sig] = String(token || '').split('.');
-  if (!sig) return;
-  const nowS = Math.floor(nowMs / 1000);
-  // Garbage collect expired entries
-  for (const [k, e] of consumed) if (e < nowS) consumed.delete(k);
-  // Parse payload for expiry
-  const payload = verifyToken(token, nowMs);
-  consumed.set(sig, payload?.exp ?? nowS + 60);
-  saveAllDurableState();
-}
-
-/**
  * Consume an access token ONLY after all validations pass.
- * This ensures a token submitted against the wrong path is NOT burned.
+ * Atomically verifies and consumes the token across all running instances.
  *
  * Validation order:
- * 1. Verify HMAC + expiry + single-use
+ * 1. Verify HMAC + expiry
  * 2. Validate stream ID matches token
  * 3. Validate segment index matches token
- * 4. Only THEN mark as consumed
+ * 4. Atomically check unconsumed status and record consumption under process lock
  */
 export function consumeAccessToken(
   token: string,
@@ -94,26 +79,57 @@ export function consumeAccessToken(
   expectedSegmentIndex: number,
   nowMs = Date.now()
 ): { valid: boolean; reason?: string; record?: TokenPayload } {
-  // Step 1: Verify token (HMAC, expiry, not already consumed)
-  const payload = verifyToken(token, nowMs);
-  if (!payload) {
-    return { valid: false, reason: 'Invalid, expired, or already consumed access token' };
+  const [body, sig] = String(token || '').split('.');
+  if (!body || !sig) {
+    return { valid: false, reason: 'Invalid or malformed access token' };
   }
 
-  // Step 2: Validate stream binding BEFORE consuming
+  // Step 1: Verify HMAC
+  const expected = crypto.createHmac('sha256', SECRET).update(body).digest();
+  let given: Buffer;
+  try {
+    given = Buffer.from(sig, 'base64url');
+  } catch {
+    return { valid: false, reason: 'Invalid token signature encoding' };
+  }
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+    return { valid: false, reason: 'Invalid token HMAC' };
+  }
+
+  // Step 2: Parse payload and check expiry
+  let payload: TokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenPayload;
+  } catch {
+    return { valid: false, reason: 'Malformed token payload' };
+  }
+
+  const nowS = Math.floor(nowMs / 1000);
+  if (typeof payload.exp !== 'number' || payload.exp < nowS) {
+    return { valid: false, reason: 'Expired access token' };
+  }
+
+  // Step 3: Validate stream binding BEFORE consuming (prevents burning on wrong path)
   if (payload.stream !== expectedStreamId) {
-    // DO NOT consume the token — it may be valid for the correct stream
     return { valid: false, reason: `Stream ID mismatch: token authorized for ${payload.stream}, got ${expectedStreamId}` };
   }
 
-  // Step 3: Validate segment index binding BEFORE consuming
+  // Step 4: Validate segment index binding BEFORE consuming
   if (payload.idx !== expectedSegmentIndex) {
-    // DO NOT consume the token — it may be valid for the correct segment
     return { valid: false, reason: `Segment index mismatch: token authorized for ${payload.idx}, got ${expectedSegmentIndex}` };
   }
 
-  // Step 4: All checks passed — NOW consume the token
-  markConsumed(token, nowMs);
+  // Step 5: Atomically verify unconsumed status and record consumption across instances
+  let consumedOk: boolean;
+  try {
+    consumedOk = tryAtomicConsumeToken(sig, payload.exp, nowS);
+  } catch (err: any) {
+    console.error(`FATAL: Durable replay protection failed during token consumption: ${err.message}`);
+    return { valid: false, reason: `Durable replay protection failure: ${err.message}` };
+  }
+  if (!consumedOk) {
+    return { valid: false, reason: 'Access token already consumed (replay prevented)' };
+  }
 
   return {
     valid: true,

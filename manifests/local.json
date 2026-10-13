@@ -11,9 +11,9 @@
     "expectedDecimals": 6,
     "source": "Local mock deployment"
   },
-  "settlementContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  "settlementContract": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
   "deploymentTxHash": null,
-  "deploymentBlock": 1,
+  "deploymentBlock": 0,
   "abiVersion": "streampay-v2.5",
   "eip712Name": "StreamPaySettlement",
   "eip712Version": "2.5"

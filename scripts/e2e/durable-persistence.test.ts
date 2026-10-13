@@ -11,8 +11,16 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { privateKeyToAccount } from 'viem/accounts';
 import { type Hex } from 'viem';
+import {
+  acquireLock,
+  releaseLock,
+  isProcessAlive,
+  readLockPayload,
+  type LockPayload,
+} from '../../access-service/dist/durableStore';
 
 const TEST_DIR = path.join(__dirname, '../../.test-durable-data');
 const PORT_A = 4071;
@@ -23,7 +31,7 @@ const ACCESS_URL_B = `http://localhost:${PORT_B}`;
 // Shared secret for multi-instance tests (at least 32 characters)
 const SHARED_SECRET = 'streampay_secure_shared_token_secret_for_cluster_testing_32chars';
 
-// Ephemeral keys for signing vouchers
+// Public Anvil test key. Never use on a real network.
 const signerAccount = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
 
 async function waitForServer(url: string, timeoutMs = 8000): Promise<boolean> {
@@ -42,7 +50,7 @@ async function waitForServer(url: string, timeoutMs = 8000): Promise<boolean> {
 }
 
 function spawnInstance(port: number, envOverrides: Record<string, string> = {}): ChildProcess {
-  return spawn(
+  const p = spawn(
     'node',
     [path.join(__dirname, '../../access-service/dist/server.js')],
     {
@@ -59,6 +67,8 @@ function spawnInstance(port: number, envOverrides: Record<string, string> = {}):
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );
+  p.stderr?.on('data', (d) => console.error(`[err:${port}]`, d.toString().trim()));
+  return p;
 }
 
 async function signVoucher(sessionId: Hex, cumulativeUnits: bigint) {
@@ -271,6 +281,110 @@ async function runTests() {
       throw new Error(`Expected Instance A to reject token consumed by Instance B, got ${replayResA.status}`);
     }
     console.log('  ✅ Instance A rejected replay of token consumed by Instance B (cross-instance single-use)');
+
+    // ────────────────────────────────────────────────────────────────
+    // TEST 4: Concurrent Cross-Instance Updates & Conflict Prevention
+    // ────────────────────────────────────────────────────────────────
+    console.log('\nTest 4: Verifying concurrent updates & conflict resolution across instances...');
+
+    // Instance A issues and delivers Segment 2 for Session 1
+    const sig2 = await signVoucher(sessionId, 6n);
+    const gateResA2 = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 2,
+        voucher: { sessionId, cumulativeUnits: '6', signature: sig2 },
+      }),
+    });
+    const gateDataA2: any = await gateResA2.json();
+    if (!gateResA2.ok || !gateDataA2.success) throw new Error('Failed to gate segment 2 on Instance A');
+
+    // Deliver segment 2 on Instance A
+    const delResA2 = await fetch(`${ACCESS_URL_A}${gateDataA2.contentUrl}`);
+    if (!delResA2.ok) throw new Error('Failed to deliver segment 2 on Instance A');
+
+    // Meanwhile, Session 2 is processed on Instance B concurrently
+    const session2Id: Hex = '0x2222222222222222222222222222222222222222222222222222222222222222';
+    const sigSession2 = await signVoucher(session2Id, 2n);
+    const gateResB2 = await fetch(`${ACCESS_URL_B}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: session2Id,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 0,
+        voucher: { sessionId: session2Id, cumulativeUnits: '2', signature: sigSession2 },
+      }),
+    });
+    const gateDataB2: any = await gateResB2.json();
+    if (!gateResB2.ok || !gateDataB2.success) throw new Error('Failed to gate session 2 on Instance B');
+
+    // Deliver on Instance B
+    const delResB2 = await fetch(`${ACCESS_URL_B}${gateDataB2.contentUrl}`);
+    if (!delResB2.ok) throw new Error('Failed to deliver session 2 on Instance B');
+
+    // Verify state.json contains updates from BOTH Instance A and Instance B (no lost updates!)
+    const stateFile = path.join(TEST_DIR, 'state.json');
+    const persistedState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    if (!persistedState.sessions[sessionId.toLowerCase()]) {
+      throw new Error('Session 1 missing from persisted state');
+    }
+    if (!persistedState.sessions[session2Id.toLowerCase()]) {
+      throw new Error('Session 2 lost from persisted state due to concurrent overwrite');
+    }
+    console.log('  ✅ Concurrent writes preserved both sessions in state.json without lost updates');
+
+    // Simultaneous first-use race test across separate instances
+    // Issue a brand-new token for Segment 3, then send simultaneous first-use requests to Instance A and Instance B
+    const sig3 = await signVoucher(sessionId, 8n);
+    const gateRes3 = await fetch(`${ACCESS_URL_A}/api/access/segment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        sessionSigner,
+        recipient,
+        contractAddress,
+        chainId: 31337,
+        streamId: 'monad-keynote-hd',
+        segmentIndex: 3,
+        voucher: { sessionId, cumulativeUnits: '8', signature: sig3 },
+      }),
+    });
+    const gateData3: any = await gateRes3.json();
+    if (!gateRes3.ok || !gateData3.success) throw new Error('Failed to gate segment 3');
+
+    // Fire simultaneous first-use requests to Instance A and Instance B
+    const [firstUseA, firstUseB] = await Promise.all([
+      fetch(`${ACCESS_URL_A}${gateData3.contentUrl}`),
+      fetch(`${ACCESS_URL_B}${gateData3.contentUrl}`),
+    ]);
+    const statuses = [firstUseA.status, firstUseB.status].sort();
+    if (statuses[0] !== 200 || statuses[1] !== 403) {
+      throw new Error(`Expected atomic check-and-consume to produce [200, 403], got [${firstUseA.status}, ${firstUseB.status}]`);
+    }
+    console.log('  ✅ Simultaneous first-use race across instances resolved atomically: exactly 1 granted (200), 1 rejected (403)');
+
+    // Verify subsequent replay attempt across both instances also returns 403
+    const [replay1, replay2] = await Promise.all([
+      fetch(`${ACCESS_URL_A}${gateData3.contentUrl}`),
+      fetch(`${ACCESS_URL_B}${gateData3.contentUrl}`),
+    ]);
+    if (replay1.status !== 403 || replay2.status !== 403) {
+      throw new Error(`Expected subsequent replays to be rejected (403), got ${replay1.status} and ${replay2.status}`);
+    }
+    console.log('  ✅ Subsequent replays on both instances strictly rejected (both returned 403)');
   } finally {
     procA.kill('SIGKILL');
     procB.kill('SIGKILL');
@@ -278,7 +392,200 @@ async function runTests() {
     fs.rmSync(TEST_DIR, { recursive: true, force: true });
   }
 
-  console.log('\n🎉 ALL Durable Persistence & Multi-Instance Tests PASSED!\n');
+  // Test 5: Verifying fail-closed behavior on corrupted durable state file
+  console.log('\nTest 5: Verifying persistence corruption fails closed (refuses to start with blank replay state)...');
+  const corruptDir = path.join(os.tmpdir(), `streampay-corrupt-test-${Date.now()}`);
+  fs.mkdirSync(corruptDir, { recursive: true });
+  fs.writeFileSync(path.join(corruptDir, 'state.json'), '{"corrupted": true, broken json...');
+
+  const corruptProc = spawn(
+    'node',
+    [path.join(__dirname, '../../access-service/dist/server.js')],
+    {
+      env: {
+        ...process.env,
+        PORT: '4094',
+        SIMULATION_MODE: 'true',
+        DATA_STORE_DIR: corruptDir,
+        TOKEN_SECRET: 'test-secret-at-least-32-chars-long-1234567890',
+        NETWORK: 'local',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+
+  let corruptErrOutput = '';
+  corruptProc.stderr.on('data', (d) => { corruptErrOutput += d.toString(); });
+  corruptProc.stdout.on('data', (d) => { corruptErrOutput += d.toString(); });
+
+  const exitCode = await new Promise<number>((resolve) => {
+    corruptProc.on('exit', (code) => resolve(code ?? 0));
+    setTimeout(() => {
+      corruptProc.kill('SIGKILL');
+      resolve(-1);
+    }, 5000);
+  });
+
+  fs.rmSync(corruptDir, { recursive: true, force: true });
+  if (exitCode === 0) {
+    throw new Error('Server with corrupted state file unexpectedly started instead of failing closed!');
+  }
+  if (!corruptErrOutput.includes('CRITICAL: Corrupted durable state')) {
+    throw new Error(`Expected fail-closed error message, got: ${corruptErrOutput}`);
+  }
+  console.log(`  ✅ Corrupted state.json caused server to fail closed (exit code ${exitCode}) with fatal replay-protection error`);
+
+  // ────────────────────────────────────────────────────────────────
+  // TEST 6: Rigorous Filesystem Lock Concurrency & Safety Properties
+  // ────────────────────────────────────────────────────────────────
+  console.log('\nTest 6: Rigorous unit verification of filesystem lock concurrency properties...');
+  const lockTestDir = path.join(os.tmpdir(), `streampay-lock-test-${Date.now()}`);
+  fs.mkdirSync(lockTestDir, { recursive: true });
+  process.env.DATA_STORE_DIR = lockTestDir;
+
+  try {
+    const lockFile = path.join(lockTestDir, 'state.json.lock');
+
+    // Subtest 6a: Live lock holder exceeding normal stale-lock age MUST NOT have lock stolen
+    {
+      const liveLock = acquireLock(2000, lockTestDir);
+      // Simulate that the lock file is old (e.g. 15 seconds old)
+      const fifteenSecsAgo = (Date.now() - 15000) / 1000;
+      fs.utimesSync(lockFile, fifteenSecsAgo, fifteenSecsAgo);
+
+      // Attempt to acquire from another caller with short timeout (300ms)
+      let theftPrevented = false;
+      try {
+        acquireLock(300, lockTestDir);
+      } catch (err: any) {
+        theftPrevented = err.message.includes('Timeout acquiring durable state lockfile');
+      }
+      if (!theftPrevented) {
+        throw new Error('FAILED: Lock held by a live process was stolen after exceeding normal age!');
+      }
+
+      // Verify original lock still intact with original ownerToken
+      const current = readLockPayload(lockFile);
+      if (current.payload?.ownerToken !== liveLock.ownerToken) {
+        throw new Error('FAILED: Lock file content altered while held by living process!');
+      }
+
+      releaseLock(liveLock, lockTestDir);
+      if (fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Lock file was not released cleanly by live owner!');
+      }
+      console.log('  ✅ 6a: Live lock holder exceeding normal age (15s) was NOT stolen (liveness preserved)');
+    }
+
+    // Subtest 6b: Genuinely abandoned lock (dead PID) is safely recovered
+    {
+      // Pick a PID that does not exist
+      let deadPid = 999999;
+      while (isProcessAlive(deadPid)) {
+        deadPid++;
+      }
+      const abandonedPayload: LockPayload = {
+        ownerToken: `dead-${deadPid}-${Date.now()}`,
+        pid: deadPid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now() - 5000,
+      };
+      fs.writeFileSync(lockFile, JSON.stringify(abandonedPayload), 'utf8');
+      const twoSecsAgo = (Date.now() - 2000) / 1000;
+      fs.utimesSync(lockFile, twoSecsAgo, twoSecsAgo);
+
+      // acquireLock should detect dead PID (ESRCH), recover the abandoned lock, and acquire
+      const recoveredLock = acquireLock(2000, lockTestDir);
+      if (recoveredLock.ownerToken === abandonedPayload.ownerToken) {
+        throw new Error('FAILED: Acquired lock had old dead ownerToken!');
+      }
+      const newPayload = readLockPayload(lockFile);
+      if (newPayload.payload?.ownerToken !== recoveredLock.ownerToken) {
+        throw new Error('FAILED: Lock file does not contain newly acquired ownerToken!');
+      }
+
+      releaseLock(recoveredLock, lockTestDir);
+      console.log('  ✅ 6b: Genuinely abandoned lock (dead PID) was safely recovered');
+    }
+
+    // Subtest 6c: A former owner cannot remove a replacement owner's lock during release
+    {
+      // Process acquires lock 1
+      const lock1 = acquireLock(2000, lockTestDir);
+
+      // Simulate that another process has acquired lock 2 (e.g. different owner token)
+      const replacementPayload: LockPayload = {
+        ownerToken: `replacement-owner-${Date.now()}`,
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: Date.now(),
+      };
+      // Overwrite lock file to simulate replacement lock
+      fs.writeFileSync(lockFile, JSON.stringify(replacementPayload), 'utf8');
+
+      // Now lock1 is released by former owner
+      releaseLock(lock1, lockTestDir);
+
+      // Verify replacement lock is STILL on disk untouched!
+      if (!fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Former owner deleted replacement owner lock file during release!');
+      }
+      const checkReplacement = readLockPayload(lockFile);
+      if (checkReplacement.payload?.ownerToken !== replacementPayload.ownerToken) {
+        throw new Error('FAILED: Replacement owner lock was corrupted during former owner release!');
+      }
+
+      // Cleanup simulated replacement lock
+      fs.unlinkSync(lockFile);
+      console.log('  ✅ 6c: Former owner release DID NOT remove replacement owner lock (owner isolation verified)');
+    }
+
+    // Subtest 6d: Timeout handling on contested lock
+    {
+      const lockHolder = acquireLock(2000, lockTestDir);
+      let timedOut = false;
+      const tStart = Date.now();
+      try {
+        acquireLock(200, lockTestDir); // 200ms timeout
+      } catch (err: any) {
+        timedOut = err.message.includes('Timeout acquiring durable state lockfile');
+      }
+      const elapsed = Date.now() - tStart;
+      if (!timedOut) {
+        throw new Error('FAILED: Contested lock did not time out as expected');
+      }
+      if (elapsed < 180) {
+        throw new Error(`FAILED: Timeout fired prematurely (${elapsed}ms < 180ms)`);
+      }
+      releaseLock(lockHolder, lockTestDir);
+      console.log(`  ✅ 6d: Lock timeout safely triggered after ${elapsed}ms on contested lock`);
+    }
+
+    // Subtest 6e: Corrupted/empty locks fail closed instead of age-based deletion
+    {
+      fs.writeFileSync(lockFile, ''); // 0-byte corrupt lock
+      const twoSecsAgo = (Date.now() - 2000) / 1000;
+      fs.utimesSync(lockFile, twoSecsAgo, twoSecsAgo);
+
+      let failedClosed = false;
+      try {
+        acquireLock(300, lockTestDir);
+      } catch (err: any) {
+        failedClosed = err.message.includes('Timeout acquiring durable state lockfile');
+      }
+      if (!failedClosed || !fs.existsSync(lockFile)) {
+        throw new Error('FAILED: Empty lock was reclaimed instead of failing closed');
+      }
+      fs.rmSync(lockTestDir, { recursive: true, force: true });
+      fs.mkdirSync(lockTestDir, { recursive: true });
+      console.log('  ✅ 6e: Empty/corrupted lock retained and acquisition failed closed');
+    }
+
+  } finally {
+    fs.rmSync(lockTestDir, { recursive: true, force: true });
+  }
+
+  console.log('\n🎉 ALL Durable Persistence, Multi-Instance & Lock Concurrency Tests PASSED!\n');
 }
 
 runTests().catch((err) => {

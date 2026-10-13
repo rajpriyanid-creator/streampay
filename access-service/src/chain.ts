@@ -83,7 +83,7 @@ export async function initChain(): Promise<number> {
   chainId = await publicClient.getChainId();
 
   if (!isLocal) {
-    const expectedChain = config.NETWORK === 'testnet' ? 10143 : 143;
+    const expectedChain = config.NETWORK === 'testnet' || config.NETWORK === 'monad-testnet' ? 10143 : 143;
     if (chainId !== expectedChain) {
       throw new Error(`CRITICAL: Chain ID mismatch for ${config.NETWORK}. Expected ${expectedChain}, got ${chainId}`);
     }
@@ -160,9 +160,10 @@ export async function initChain(): Promise<number> {
 const cache = new Map<string, { at: number; value: OnChainSession }>();
 const CACHE_MS = 1500;
 
-export async function readSession(sessionId: Hex): Promise<OnChainSession | null> {
+export async function readSession(sessionId: Hex, opts: { fresh?: boolean } = {}): Promise<OnChainSession | null> {
   if (!config.settlementAddress) return null;
   const key = sessionId.toLowerCase();
+  if (opts.fresh) cache.delete(key);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   try {

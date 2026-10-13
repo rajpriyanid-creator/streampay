@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { isAddress, getAddress, type Hex } from 'viem';
@@ -7,7 +8,8 @@ import {
   getManifest,
   getMerkleProof,
   getSegment,
-  getSegmentBytes,
+    getSegmentBytes,
+    getSegmentFilePath,
   getStreamIdList,
   UNIT_PRICE,
   UNITS_PER_SEGMENT,
@@ -23,7 +25,7 @@ import {
   voucherStoreMap,
   Voucher,
 } from './voucherStore';
-import { registerStores, getOrInitTokenSecret } from './durableStore';
+import { registerStores, getOrInitTokenSecret, validatePersistenceConfiguration } from './durableStore';
 
 registerStores({
   consumed: consumedTokensMap,
@@ -35,9 +37,46 @@ export let activeMode: 'onchain' | 'simulation' = 'simulation';
 export let activeSettlement: Hex | undefined = undefined;
 export let isChainReady = false;
 
+// ─── Structured Logging ──────────────────────────────────────────
+export function logStructured(level: 'info' | 'warn' | 'error', message: string, meta: Record<string, any> = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...meta,
+  };
+  if (level === 'error') {
+    console.error(JSON.stringify(entry));
+  } else if (level === 'warn') {
+    console.warn(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
+  }
+}
+
 const app = express();
 app.use(cors({ origin: config.CORS_ORIGIN, credentials: true }));
 app.use(express.json());
+
+// ─── Request ID & Request Logging Middleware ───────────────────────
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const reqId = (req.headers['x-request-id'] as string) || crypto.randomUUID();
+  (req as any).id = reqId;
+  res.setHeader('X-Request-Id', reqId);
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api') || req.path === '/health') {
+      logStructured('info', 'HTTP request completed', {
+        requestId: reqId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - start,
+      });
+    }
+  });
+  next();
+});
 
 // ─── Admin Auth Middleware ─────────────────────────────────────────
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -64,16 +103,40 @@ interface RateBucket {
 }
 const rateLimitStore = new Map<string, RateBucket>();
 
+function clientIp(req: Request): string {
+  const socketIp = req.socket.remoteAddress || '127.0.0.1';
+  const trustedHops = config.TRUSTED_PROXY_HOPS;
+  if (trustedHops <= 0) return socketIp;
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded !== 'string') return socketIp;
+  const chain = forwarded.split(',').map((v) => v.trim()).filter(Boolean);
+  return chain[Math.max(0, chain.length - trustedHops)] || socketIp;
+}
+
 export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
+    const rawIp = clientIp(req);
     const limit = (req.headers['x-test-rate-limit'] && (config.NETWORK === 'local' || process.env.NODE_ENV === 'test'))
       ? Number(req.headers['x-test-rate-limit'])
       : defaultLimit;
 
     const refillRate = limit / 60000; // tokens per ms
-    const clientKey = `${rawIp}`;
+    // Keep explicitly test-scoped limits isolated from the production bucket
+    // for the same socket. Testing controls are unavailable outside local/test
+    // mode and therefore cannot partition production traffic.
+    const clientKey = `${rawIp}:${limit}`;
     const now = Date.now();
+
+    // Bound memory even when attackers rotate source addresses.
+    if (rateLimitStore.size > 10000) {
+      for (const [key, value] of rateLimitStore) {
+        if (now - value.lastRefill > 120000) rateLimitStore.delete(key);
+      }
+      if (rateLimitStore.size > 10000) {
+        const oldest = [...rateLimitStore.entries()].sort((a, b) => a[1].lastRefill - b[1].lastRefill).slice(0, rateLimitStore.size - 10000);
+        for (const [key] of oldest) rateLimitStore.delete(key);
+      }
+    }
 
     let bucket = rateLimitStore.get(clientKey);
     if (!bucket) {
@@ -102,10 +165,12 @@ export function rateLimiter(defaultLimit = config.rateLimitPerMin) {
   };
 }
 // ─── Health Check ────────────────────────────────────────────────
-app.get('/health', async (_req: Request, res: Response) => {
+app.get('/health', async (req: Request, res: Response) => {
   const isSim = activeMode === 'simulation';
+  const reqId = (req as any).id || (req.headers['x-request-id'] as string) || 'unknown';
   res.json({
     status: 'ok',
+    requestId: reqId,
     ready: isChainReady,
     service: 'StreamPay Access Service v2.5',
     mode: activeMode,
@@ -466,7 +531,8 @@ app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Respons
       tokenSig,
       reqTtlSec,
       onChainSettledUnits,
-      reqNowMs
+      reqNowMs,
+      parsedVoucher.signature
     );
 
     if (!reserveCheck.allowed) {
@@ -512,16 +578,25 @@ app.post('/api/access/segment', rateLimiter(), async (req: Request, res: Respons
       segmentIndex: idx,
       cumulativeUnits: parsedVoucher.cumulativeUnits.toString(),
       segmentToken,
-      contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/segment_${idx}.ts?token=${encodeURIComponent(segmentToken)}`,
+      contentUrl: `/api/access/content/${encodeURIComponent(targetStream)}/${getSegmentFilePath(targetStream, idx).toLowerCase().endsWith('.mp4') ? `segment_${idx}.mp4` : `segment_${idx}.ts`}?token=${encodeURIComponent(segmentToken)}`,
     });
   } catch (err: any) {
-    console.error('Error processing gated segment request:', err);
-    res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err.message });
+    const requestId = (req as any).id || 'unknown';
+    logStructured('error', 'Error processing gated segment request', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err?.message || String(err), requestId });
   }
 });
 
 // ─── Gated Content Segment Delivery Route with Token Validation ────
 app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req: Request, res: Response) => {
+  const requestId = (req as any).id || 'unknown';
+  try {
   const { streamId, segmentFile } = req.params;
   const { token } = req.query;
 
@@ -530,7 +605,7 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
     return;
   }
 
-  const match = segmentFile.match(/^segment_(\d+)\.ts$/);
+  const match = segmentFile.match(/^segment_(\d+)\.(ts|mp4)$/);
   if (!match) {
     res.status(400).json({ code: 'INVALID_SEGMENT_FILE', error: `Invalid segment filename: ${segmentFile}` });
     return;
@@ -572,8 +647,12 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
   // Delivery tracking: release / complete reservation on actual HTTP stream outcome
   res.on('finish', async () => {
     const outcome = await reservationLedger.onDeliveryCompleted(sessKey, tokenSig, segmentIndex);
-    if (outcome?.cumulativeUnits !== undefined) {
-      markVoucherDelivered(sessKey as Hex, outcome.cumulativeUnits);
+    if (outcome?.voucher) {
+      markVoucherDelivered(sessKey as Hex, {
+        sessionId: outcome.voucher.sessionId as Hex,
+        cumulativeUnits: outcome.voucher.cumulativeUnits,
+        signature: outcome.voucher.signature as Hex,
+      });
     }
   });
   res.on('close', () => {
@@ -585,10 +664,24 @@ app.get('/api/access/content/:streamId/:segmentFile', rateLimiter(), async (req:
     reservationLedger.onDeliveryFailed(sessKey, tokenSig);
   });
 
-  res.setHeader('Content-Type', 'video/mp2t');
+  res.setHeader('Content-Type', match[2] === 'mp4' ? 'video/mp4' : 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store, private');
   res.setHeader('Content-Length', segmentData.length.toString());
   res.send(segmentData);
+  } catch (err: any) {
+    logStructured('error', 'Error delivering gated segment', {
+      requestId,
+      method: req.method,
+      path: req.path,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
+    if (!res.headersSent) {
+      res.status(500).json({ code: 'SERVER_ERROR', error: 'Internal server error', message: err?.message || String(err), requestId });
+    } else {
+      res.destroy(err);
+    }
+  }
 });
 
 // ─── Checkpoint Notification / Sync Route ─────────────────────────
@@ -600,7 +693,7 @@ app.post('/api/session/checkpoint-sync', async (req: Request, res: Response) => 
   }
   try {
     if (config.SETTLEMENT_ADDRESS) {
-      const s = await readSession(sessionId as Hex);
+      const s = await readSession(sessionId as Hex, { fresh: true });
       if (s) {
         await reservationLedger.onCheckpoint(sessionId, s.settledUnits);
         res.json({ success: true, settledUnits: s.settledUnits.toString() });
@@ -624,10 +717,12 @@ app.get('/api/access/playlist/:streamId.m3u8', (req: Request, res: Response) => 
 
   const manifest = getManifest(streamId);
 
-  let playlist = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
+  const targetDuration = Math.max(...manifest.segments.map((segment: { durationUnits: number }) => segment.durationUnits));
+  let playlist = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:0\n`;
 
   for (let i = 0; i < manifest.segments.length; i++) {
-    playlist += `#EXTINF:2.0,\n/api/access/content/${streamId}/segment_${i}.ts\n`;
+    const extension = getSegmentFilePath(streamId, i).toLowerCase().endsWith('.mp4') ? 'mp4' : 'ts';
+    playlist += `#EXTINF:${manifest.segments[i].durationUnits}.0,\n/api/access/content/${streamId}/segment_${i}.${extension}\n`;
   }
   playlist += '#EXT-X-ENDLIST\n';
 
@@ -658,6 +753,10 @@ app.get('/api/session/latest-voucher/:sessionId', requireAdmin, (req: Request, r
       ...stored.lastVoucher,
       cumulativeUnits: stored.lastVoucher.cumulativeUnits.toString(),
     },
+    lastDeliveredVoucher: stored.lastDeliveredVoucher ? {
+      ...stored.lastDeliveredVoucher,
+      cumulativeUnits: stored.lastDeliveredVoucher.cumulativeUnits.toString(),
+    } : null,
   });
 });
 
@@ -681,6 +780,7 @@ app.listen(config.PORT, async () => {
     process.exit(1);
   }
   try {
+    validatePersistenceConfiguration();
     getOrInitTokenSecret();
   } catch (err: any) {
     console.error(`⛔ ${err.message}`);

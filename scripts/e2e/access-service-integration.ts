@@ -18,7 +18,8 @@
  * 14. Cooperatively close session on-chain and refund excess escrow
  */
 
-import { openSession, signVoucher, checkpoint, closeCooperative } from '../../frontend/lib/protocol/lifecycle';
+import { openSession, signVoucher, checkpoint, closeCooperative } from '../legacy-frontend-lib/lib/protocol/lifecycle';
+import { readSession } from '../../access-service/src/chain';
 import {
   createPublicClient,
   http,
@@ -33,9 +34,11 @@ import * as crypto from 'node:crypto';
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545';
 const ACCESS_URL = process.env.ACCESS_URL || 'http://localhost:4001';
 
-// Anvil default accounts — LOCAL DEV ONLY
+// Public Anvil test key. Never use on a real network.
 const PAYER_KEY   = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
+// Public Anvil test key. Never use on a real network.
 const CREATOR_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
+// Public Anvil test key. Never use on a real network.
 const SIGNER_KEY  = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as Hex;
 
 const SEGMENT_LEAF_TYPEHASH = keccak256(
@@ -361,10 +364,14 @@ async function main() {
   });
   if (!cpSyncRes.ok) throw new Error(`Checkpoint sync failed: ${cpSyncRes.status}`);
   const cpSyncData = await cpSyncRes.json();
-  if (cpSyncData.settledUnits !== '2') {
-    throw new Error(`Expected settledUnits: '2', got ${cpSyncData.settledUnits}`);
+  const freshOnChainSession = await readSession(sessionId);
+  if (!freshOnChainSession || freshOnChainSession.settledUnits !== 2n) {
+    throw new Error(`Fresh on-chain read did not report settledUnits=2: ${freshOnChainSession?.settledUnits}`);
   }
-  console.log('  ✅ Checkpoint sync confirmed by Access Service (settledUnits: 2)');
+  if (cpSyncData.settledUnits !== freshOnChainSession.settledUnits.toString()) {
+    throw new Error(`Checkpoint sync was stale: on-chain=${freshOnChainSession.settledUnits}, sync=${cpSyncData.settledUnits}`);
+  }
+  console.log(`  ✅ Checkpoint sync returned fresh on-chain settledUnits=${cpSyncData.settledUnits}`);
 
   // 10. Later segment playback after checkpoint (Segment 1)
   console.log('\nStep 9: Streaming Segment 1 after checkpoint (cumulativeUnits: 4)...');

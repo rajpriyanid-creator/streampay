@@ -9,4 +9,10 @@ cache/
 .DS_Store
 *.tsbuildinfo
 .streampay-data/
-
+access-service/.streampay-data-testnet/
+contracts/broadcast/
+contracts/out/
+contracts/cache/
+contracts/deployment.json
+frontend/screenshots/
+frontend/test-results/

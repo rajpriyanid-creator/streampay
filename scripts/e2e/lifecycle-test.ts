@@ -6,13 +6,15 @@
  * Usage: npx tsx scripts/e2e/lifecycle-test.ts
  * Prereqs: Anvil running on 127.0.0.1:8545 with deployed contract and token
  */
-import { openSession, signVoucher, checkpoint, closeCooperative } from '../../frontend/lib/protocol/lifecycle';
+import { openSession, signVoucher, checkpoint, closeCooperative } from '../legacy-frontend-lib/lib/protocol/lifecycle';
 import { keccak256, type Hex, type Address, createPublicClient, http } from 'viem';
 
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545';
-// Anvil default accounts — LOCAL DEV ONLY
+// Public Anvil test key. Never use on a real network.
 const PAYER_KEY   = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
+// Public Anvil test key. Never use on a real network.
 const CREATOR_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
+// Public Anvil test key. Never use on a real network.
 const SIGNER_KEY  = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as Hex;
 
 function generateTestManifestRoot(): Hex {
@@ -22,10 +24,30 @@ function generateTestManifestRoot(): Hex {
   return keccak256(`${l}${r.slice(2)}` as Hex);
 }
 
+import fs from 'node:fs';
+import path from 'node:path';
+
+function resolveContractAddress(envKey: string, manifestField: 'settlementContract' | 'paymentToken', fallback: string): Address {
+  const envVal = process.env[envKey]?.trim();
+  if (envVal) return envVal as Address;
+  const manifestPath = path.resolve(__dirname, '../../manifests/local.json');
+  const deployPath = path.resolve(__dirname, '../../contracts/deployment.json');
+  for (const p of [manifestPath, deployPath]) {
+    if (fs.existsSync(p)) {
+      try {
+        const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (manifestField === 'settlementContract' && d.settlementContract) return d.settlementContract as Address;
+        if (manifestField === 'paymentToken' && d.paymentToken?.address) return d.paymentToken.address as Address;
+      } catch {}
+    }
+  }
+  return fallback as Address;
+}
+
 async function main() {
   console.log('🧪 Starting StreamPay Complete Lifecycle Test on local chain...');
-  const settlement = (process.env.SETTLEMENT_ADDRESS || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512') as Address;
-  const token      = (process.env.TOKEN_ADDRESS || '0x5FbDB2315678afecb367f032d93F642f64180aa3') as Address;
+  const settlement = resolveContractAddress('SETTLEMENT_ADDRESS', 'settlementContract', '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512');
+  const token      = resolveContractAddress('TOKEN_ADDRESS', 'paymentToken', '0x5FbDB2315678afecb367f032d93F642f64180aa3');
 
   const manifestRoot = generateTestManifestRoot();
   console.log(`   Manifest root: ${manifestRoot.slice(0, 14)}...`);
@@ -69,6 +91,12 @@ async function main() {
     rpc: RPC, settlement, signerKey: SIGNER_KEY, sessionId, cumulativeUnits: 14n,
   });
   console.log(`   ✅ Signed voucher for 14 units: ${voucher14Sig.slice(0, 14)}... (Continued playback verified!)`);
+
+  // Make elapsed-time dependent voucher bounds deterministic on Anvil. The
+  // contract enforces cumulativeUnits <= elapsed + maxLeadUnits.
+  const rpcClient = createPublicClient({ transport: http(RPC) });
+  await rpcClient.request({ method: 'evm_increaseTime' as any, params: [30] as any });
+  await rpcClient.request({ method: 'evm_mine' as any, params: [] as any });
 
   // Step 5: Cooperative close and refund
   console.log('\n5. Cooperative Close: finalizing session at 14 cumulative units & refunding excess deposit...');
