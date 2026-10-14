@@ -41,6 +41,7 @@ When generating the audio in **Sarvam AI**:
 
 # 🎤 VIDEO 2: The 2-Minute Pitch Video (Team, Problem & Vision)
 
+* **Published Pitch Link:** [https://youtu.be/F3pzlhK0ER0](https://youtu.be/F3pzlhK0ER0)
 * **Hackathon Limit:** Up to 2 minutes (120 seconds).
 * **Target Video Runtime:** **1 minute 52 seconds** (112 seconds).
 * **Rule Compliance:** Introduces the team, articulates the problem, explains why Monad enables this breakthrough, and presents the market vision.

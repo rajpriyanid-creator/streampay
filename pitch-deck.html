@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StreamPay — Pitch Presentation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background: #0b0a08; color: #f5f5f5; min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; overflow-x: hidden; }
+    .container { max-width: 1000px; width: 100%; }
+    .nav-bar { display: flex; justify-content: center; gap: 12px; margin-bottom: 24px; }
+    .tab-btn { background: #18130d; color: #b5a48b; border: 1px solid #332717; padding: 10px 20px; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+    .tab-btn.active, .tab-btn:hover { background: #261c10; color: #ffd685; border-color: #d89a4e; box-shadow: 0 0 15px rgba(216,154,78,0.25); }
+    .card { background: linear-gradient(145deg, #140f0a 0%, #1a130c 100%); border: 1px solid #382918; border-radius: 20px; padding: 36px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); display: none; }
+    .card.active { display: block; animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; background: rgba(216,154,78,0.15); border: 1px solid rgba(216,154,78,0.4); border-radius: 20px; color: #ffd685; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 16px; }
+    h1 { font-size: 38px; font-weight: 800; background: linear-gradient(90deg, #fff 0%, #ffd685 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; }
+    p.lead { font-size: 18px; color: #c4b69d; margin-bottom: 28px; line-height: 1.5; }
+    .grid { display: grid; grid-cols: 1; gap: 16px; }
+    @media (min-width: 640px) { .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; } }
+    .stat-box { background: #0d0a06; border: 1px solid #291d10; border-radius: 14px; padding: 20px; }
+    .stat-title { font-size: 12px; text-transform: uppercase; color: #8e7c65; font-weight: 600; margin-bottom: 6px; }
+    .stat-value { font-size: 26px; font-weight: 800; color: #fff; font-family: monospace; }
+    .stat-value.red { color: #f87171; }
+    .stat-value.green { color: #4ade80; }
+    .stat-value.gold { color: #ffd685; }
+    .stat-sub { font-size: 13px; color: #9c8e77; margin-top: 4px; }
+    .comparison-row { display: flex; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #261b0e; }
+    .comparison-row:last-child { border-bottom: none; }
+    .interactive-demo { margin-top: 24px; padding: 20px; background: #0a0805; border-radius: 14px; border: 1px dashed #d89a4e; text-align: center; }
+    .interactive-btn { background: #d89a4e; color: #000; border: none; padding: 12px 24px; font-size: 15px; font-weight: 700; border-radius: 10px; cursor: pointer; transition: transform 0.1s; margin: 10px 0; }
+    .interactive-btn:active { transform: scale(0.96); }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Navigation Tabs -->
+    <div class="nav-bar">
+      <button class="tab-btn active" onclick="switchTab(0)">1. The Problem ($120/Mo Trap)</button>
+      <button class="tab-btn" onclick="switchTab(1)">2. Why Monad (10,000 TPS)</button>
+      <button class="tab-btn" onclick="switchTab(2)">3. The Win-Win Math (Pay-As-You-Watch)</button>
+    </div>
+
+    <!-- SCREEN 1: THE PROBLEM -->
+    <div class="card active" id="tab-0">
+      <div class="badge">Problem Statement</div>
+      <h1>Subscriptions Are Broken For 99% Of Media</h1>
+      <p class="lead">Consumers spend hundreds monthly on subscriptions they barely use. Creators lose 40% to platforms and wait 60 days for payout.</p>
+
+      <div class="grid-3">
+        <div class="stat-box">
+          <div class="stat-title">Monthly Web2 Cost</div>
+          <div class="stat-value red">$120.00 / Mo</div>
+          <div class="stat-sub">Across Netflix, Substack, Patreon, Sports</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-title">Content Actually Watched</div>
+          <div class="stat-value gold">10% Active Days</div>
+          <div class="stat-sub">90% of your money is completely wasted</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-title">Creator Platform Cut</div>
+          <div class="stat-value red">30% - 50%</div>
+          <div class="stat-sub">+ 60-day delayed settlement</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 2: WHY MONAD -->
+    <div class="card" id="tab-1">
+      <div class="badge">Unfair Technical Advantage</div>
+      <h1>Why StreamPay Is Only Possible On Monad</h1>
+      <p class="lead">Second-by-second micro-settlement is impossible on Ethereum and slow rollups. Monad makes it instant and frictionless.</p>
+
+      <div class="grid-3">
+        <div class="stat-box">
+          <div class="stat-title">Legacy Ethereum</div>
+          <div class="stat-value red">$5.00+ Gas</div>
+          <div class="stat-sub">12-second block time · Playback stalls</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-title">Monad Finality</div>
+          <div class="stat-value green">1 Second</div>
+          <div class="stat-sub">Sub-second responsive channels</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-title">Monad Throughput</div>
+          <div class="stat-value gold">10,000 TPS</div>
+          <div class="stat-sub">Parallel micro-vouchers for millions of users</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN 3: WIN-WIN INTERACTIVE MATH -->
+    <div class="card" id="tab-2">
+      <div class="badge">Unit Economics & Live Math</div>
+      <h1>Pay For What You Watch. Refund The Rest.</h1>
+      <p class="lead">Click the button below to simulate an 8-minute stream on Monad:</p>
+
+      <div class="interactive-demo">
+        <div class="grid-3" style="text-align: left; margin-bottom: 16px;">
+          <div class="stat-box">
+            <div class="stat-title">Payer Escrow Deposit</div>
+            <div class="stat-value gold">$1.0000 USDC</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-title">8-Min Stream Cost</div>
+            <div class="stat-value" id="billed-amount">$0.0000 USDC</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-title">Instant Refund Returned</div>
+            <div class="stat-value green" id="refund-amount">$1.0000 USDC</div>
+          </div>
+        </div>
+        <button class="interactive-btn" onclick="simulateStream()">▶ Click: Simulate 8-Minute Stream ($0.24 Billed & $0.76 Refunded)</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchTab(index) {
+      document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', i === index);
+      });
+      document.querySelectorAll('.card').forEach((card, i) => {
+        card.classList.toggle('active', i === index);
+      });
+    }
+
+    function simulateStream() {
+      document.getElementById('billed-amount').innerText = '$0.2400 USDC';
+      document.getElementById('billed-amount').style.color = '#ffd685';
+      document.getElementById('refund-amount').innerText = '$0.7600 USDC';
+      document.getElementById('refund-amount').style.color = '#4ade80';
+    }
+  </script>
+</body>
+</html>

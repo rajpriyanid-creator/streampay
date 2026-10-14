@@ -16,6 +16,7 @@ This document provides a comprehensive, structured reference of StreamPay's part
 | **Total Prize Pool** | **$145,000 USD** + Sponsor Bounties & Cloud Credits |
 | **Resources & Docs** | [https://hackathon.monad.xyz/resources](https://hackathon.monad.xyz/resources) |
 | **Demo Video Link** | [https://youtu.be/ggIfTzzRqQo](https://youtu.be/ggIfTzzRqQo) |
+| **Pitch Video Link** | [https://youtu.be/F3pzlhK0ER0](https://youtu.be/F3pzlhK0ER0) |
 
 ---
 
