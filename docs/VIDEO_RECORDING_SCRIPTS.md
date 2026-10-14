@@ -22,7 +22,8 @@ When generating the audio in **Sarvam AI**:
 ---
 
 # 🎬 VIDEO 1: The 3-Minute Demo Video (Product in Action)
-
+ 
+* **Published Demo Link:** [https://youtu.be/ggIfTzzRqQo](https://youtu.be/ggIfTzzRqQo)
 * **Hackathon Limit:** Up to 3 minutes (180 seconds).
 * **Target Video Runtime:** **2 minutes 50 seconds** (170 seconds).
 * **Rule Compliance:** Shows the real working product on Monad Testnet, live transactions, Merkle verification, and zero slides or static code reviews.

@@ -14,9 +14,8 @@ This document provides a comprehensive, structured reference of StreamPay's part
 | **Evaluation Period** | October 14, 2026 – October 27, 2026 |
 | **Winner Announcement** | November 3, 2026 |
 | **Total Prize Pool** | **$145,000 USD** + Sponsor Bounties & Cloud Credits |
-| **Hackathon Website** | [https://hackathon.monad.xyz](https://hackathon.monad.xyz) |
-| **Tracks & Bounties Portal** | [https://hackathon.monad.xyz/tracks](https://hackathon.monad.xyz/tracks) |
 | **Resources & Docs** | [https://hackathon.monad.xyz/resources](https://hackathon.monad.xyz/resources) |
+| **Demo Video Link** | [https://youtu.be/ggIfTzzRqQo](https://youtu.be/ggIfTzzRqQo) |
 
 ---
 

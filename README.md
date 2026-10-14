@@ -34,6 +34,7 @@
 
 ### 🌐 Live Public Deployments & Verified On-Chain Artifacts
 
+- **Official Product Demo Video:** [https://youtu.be/ggIfTzzRqQo](https://youtu.be/ggIfTzzRqQo) (3-Minute Product Walkthrough on Monad Testnet)
 - **Live Web Player:** [https://streampay-frontend.onrender.com](https://streampay-frontend.onrender.com) (Deployed via Render Blueprint from `frontend-zip/`)
 - **Live Access Service:** [https://streampay-access-service.onrender.com/health](https://streampay-access-service.onrender.com/health) (Reports `status: ok`, `activeMode: onchain`, `chainId: 10143`)
 - **Settlement Contract:** [`0x3E016fa87f7149971F65Df413b667C5355c5B060`](https://testnet.monadscan.com/address/0x3E016fa87f7149971F65Df413b667C5355c5B060) on Monad Testnet (Chain ID `10143`)
