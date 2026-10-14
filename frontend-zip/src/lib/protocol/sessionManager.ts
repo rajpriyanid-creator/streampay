@@ -26,6 +26,7 @@ import {
   claimRefund,
   requestClose as requestRealClose,
   finalizeAfterChallenge as finalizeRealAfterChallenge,
+  readOnChainSession,
 } from './realLifecycle';
 
 export type NetworkType = 'local' | 'testnet';
@@ -35,7 +36,7 @@ export interface SessionEvent { id: string; type: string; timestamp: string; txH
 export interface StreamSessionState {
   sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed' | 'close_requested'; cumulativeUnits: number; settledUnits: number;
   initialDepositUSDC: string; unredeemedUSDC: string; sessionSigner: Address | ''; payer: Address | ''; recipient: Address | ''; contractAddress: Address | ''; paymentToken: Address | '';
-  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'credited' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
+  openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'credited' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null; challengeEndsAt?: number | null;
 }
 
 export const MONAD_TESTNET_CHAIN_ID = 10143;
@@ -723,10 +724,41 @@ export class ProtocolLifecycleManager {
     return tx;
   }
 
+  async syncOnChainSession(sessionId?: Hex): Promise<void> {
+    const id = sessionId || this.session.sessionId;
+    if (!id || this.network !== 'testnet' || !this.session.contractAddress || this.session.contractAddress === zeroAddress) return;
+    try {
+      const s = await readOnChainSession(rpcFor(this.network), requireAddress(this.session.contractAddress, 'Settlement contract'), id);
+      if (s) {
+        if (s.status === 2) {
+          this.session.status = 'close_requested';
+          this.session.challengeEndsAt = Number(s.challengeEndsAt);
+        } else if (s.status === 3) {
+          this.session.status = 'closed';
+        } else if (s.status === 1) {
+          this.session.status = 'active';
+        }
+        if (s.initialDeposit) {
+          this.session.initialDepositUSDC = (Number(s.initialDeposit) / 1_000_000).toFixed(4);
+        }
+        if (s.sessionSigner) {
+          this.session.sessionSigner = s.sessionSigner;
+        }
+        if (s.payer) {
+          this.session.payer = s.payer;
+        }
+        this.notify();
+      }
+    } catch (e) {
+      console.warn('Failed to sync session from chain:', e);
+    }
+  }
+
   async refreshClaimableRefund(): Promise<string> {
     if (simulationMode || this.session.isSimulated || !this.wallet.address || !this.session.contractAddress || this.session.contractAddress === zeroAddress) {
       return this.session.claimableUSDC;
     }
+    void this.syncOnChainSession();
     const amount = await readClaimable({
       rpc: rpcFor(this.network),
       settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
@@ -881,6 +913,15 @@ export class ProtocolLifecycleManager {
       this.session.status = 'closed';
       this.notify();
       return null;
+    }
+    if (this.session.challengeEndsAt) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (nowSec < this.session.challengeEndsAt) {
+        const diff = this.session.challengeEndsAt - nowSec;
+        const min = Math.floor(diff / 60);
+        const sec = diff % 60;
+        throw new Error(`Monad security challenge period is currently active (${min}m ${sec}s remaining). Finalize will unlock at ${new Date(this.session.challengeEndsAt * 1000).toLocaleTimeString()} to release your refund.`);
+      }
     }
     await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
     const tx = await finalizeRealAfterChallenge({

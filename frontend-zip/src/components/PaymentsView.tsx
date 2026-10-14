@@ -40,7 +40,20 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   const [minutes, setMinutes] = useState('10');
   const [envioTelemetry, setEnvioTelemetry] = useState<EnvioTelemetry | null>(null);
   const [isRefreshingEnvio, setIsRefreshingEnvio] = useState(false);
+  const [challengeRemaining, setChallengeRemaining] = useState<number>(0);
   const ratePerSecond = 0.0005;
+
+  useEffect(() => {
+    if (session.status !== 'close_requested') return;
+    const updateCountdown = () => {
+      const now = Math.floor(Date.now() / 1000);
+      const ends = session.challengeEndsAt || 0;
+      setChallengeRemaining(Math.max(0, ends - now));
+    };
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [session.status, session.challengeEndsAt]);
 
   const refreshEnvio = useCallback(async () => {
     setIsRefreshingEnvio(true);
@@ -169,11 +182,20 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
           {session.status === 'close_requested' && (
             <button
               onClick={onFinalizeChallenge || onRefundSession}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black text-xs font-bold flex items-center gap-2 cursor-pointer shadow-md transition-all"
-              title="Finalize challenge and claim remaining escrow to your wallet"
+              disabled={challengeRemaining > 0}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-md transition-all ${
+                challengeRemaining > 0
+                  ? 'bg-neutral-800 border border-neutral-700 text-neutral-400 cursor-not-allowed opacity-80'
+                  : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)]'
+              }`}
+              title={challengeRemaining > 0 ? `Challenge period unlocking in ${Math.floor(challengeRemaining / 60)}m ${challengeRemaining % 60}s` : 'Finalize and claim remaining escrow'}
             >
               <Banknote className="w-4 h-4" />
-              <span>Finalize Escrow Refund</span>
+              <span>
+                {challengeRemaining > 0
+                  ? `Unlocking in ${Math.floor(challengeRemaining / 60)}m ${challengeRemaining % 60}s...`
+                  : 'Finalize Escrow Refund'}
+              </span>
             </button>
           )}
         </div>
@@ -313,17 +335,33 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                 <span className="text-xs font-bold text-amber-200">
                   Unilateral Close Challenge Active on Monad
                 </span>
+                {challengeRemaining > 0 && (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-900/50 border border-amber-700/50 text-[11px] font-mono font-bold text-amber-300">
+                    ⏱ {Math.floor(challengeRemaining / 60)}:{(challengeRemaining % 60).toString().padStart(2, '0')} remaining
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-neutral-300 mt-1 max-w-xl">
-                Your unilateral close request has been recorded on Monad Testnet. Once the 15-minute challenge window concludes, click Finalize Refund to release all unspent escrow ({session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC) directly to your wallet.
+                {challengeRemaining > 0
+                  ? `Your unilateral close request is confirmed on Monad Testnet. The contract enforces a 15-minute challenge period to prevent double-spending. The remaining ${session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC refund will unlock at ${session.challengeEndsAt ? new Date(session.challengeEndsAt * 1000).toLocaleTimeString() : '7:55 AM'}.`
+                  : `Challenge window has elapsed! Click Finalize Refund below to transfer your full ${session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC directly into your wallet.`}
               </p>
             </div>
             <button
               onClick={onFinalizeChallenge || onRefundSession}
-              className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all whitespace-nowrap"
+              disabled={challengeRemaining > 0}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all whitespace-nowrap ${
+                challengeRemaining > 0
+                  ? 'bg-neutral-800 border border-neutral-700 text-neutral-400 cursor-not-allowed opacity-80'
+                  : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.4)]'
+              }`}
             >
               <Banknote className="w-4 h-4" />
-              <span>Finalize Refund On-Chain</span>
+              <span>
+                {challengeRemaining > 0
+                  ? `Unlocking in ${Math.floor(challengeRemaining / 60)}m ${challengeRemaining % 60}s...`
+                  : 'Finalize & Claim Refund (5.0 USDC)'}
+              </span>
             </button>
           </div>
         )}

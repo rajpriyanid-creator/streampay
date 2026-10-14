@@ -35,6 +35,15 @@ const settlementAbi = [
   { type: 'function', name: 'claimable', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }, { name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'requestClose', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [] },
   { type: 'function', name: 'finalizeAfterChallenge', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [] },
+  { type: 'function', name: 'getSession', stateMutability: 'view', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [{ name: '', type: 'tuple', components: [
+    { name: 'payer', type: 'address' }, { name: 'sessionSigner', type: 'address' }, { name: 'recipient', type: 'address' },
+    { name: 'offerDigest', type: 'bytes32' }, { name: 'contentIdHash', type: 'bytes32' }, { name: 'pricingPolicyHash', type: 'bytes32' }, { name: 'manifestRoot', type: 'bytes32' },
+    { name: 'initialDeposit', type: 'uint256' }, { name: 'unitPrice', type: 'uint256' }, { name: 'maxUnredeemedAmount', type: 'uint256' }, { name: 'settledAmount', type: 'uint256' },
+    { name: 'settledUnits', type: 'uint64' }, { name: 'maxBillableUnits', type: 'uint64' }, { name: 'maxCreditWindowUnits', type: 'uint64' }, { name: 'maxLeadUnits', type: 'uint64' },
+    { name: 'openedAt', type: 'uint64' }, { name: 'validUntil', type: 'uint64' }, { name: 'offerExpiresAt', type: 'uint64' }, { name: 'redemptionGraceSeconds', type: 'uint64' },
+    { name: 'redemptionDeadline', type: 'uint64' }, { name: 'closeRequestedAt', type: 'uint64' }, { name: 'challengeEndsAt', type: 'uint64' }, { name: 'maxCreditSegments', type: 'uint8' },
+    { name: 'status', type: 'uint8' }
+  ]}] },
 ] as const;
 const tokenAbi = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] },
@@ -138,4 +147,9 @@ export async function finalizeAfterChallenge(p: { walletClient: any; rpc: string
   if (receipt.status !== 'success') throw new Error(`Finalize challenge failed: ${txHash}`);
   return txHash;
 }
+
+export async function readOnChainSession(rpc: string, settlement: Address, sessionId: Hex): Promise<any> {
+  return await publicClient(rpc).readContract({ address: settlement, abi: settlementAbi, functionName: 'getSession', args: [sessionId] }) as any;
+}
+
 
