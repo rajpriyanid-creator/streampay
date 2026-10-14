@@ -962,6 +962,43 @@ export class ProtocolLifecycleManager {
     this.session.lastCloseAckSignature = sig;
     this.notify();
   }
+
+  resetDemoSession(): void {
+    const storage = browserSessionStorage();
+    storage?.removeItem(sessionStorageKey);
+    storage?.removeItem(signerStorageKey);
+    this.session = {
+      sessionId: null,
+      status: 'inactive',
+      cumulativeUnits: 0,
+      settledUnits: 0,
+      initialDepositUSDC: '0',
+      unredeemedUSDC: '0',
+      sessionSigner: '',
+      payer: '',
+      recipient: '',
+      contractAddress: this.network === 'testnet' ? (import.meta.env?.VITE_SETTLEMENT_ADDRESS || '') as Address : '',
+      paymentToken: this.network === 'testnet' ? MONAD_PAYMENT_TOKEN : '',
+      openedAt: null,
+      lastTxHash: null,
+      lastVoucherSignature: null,
+      lastCloseAckSignature: null,
+      verificationLogs: [],
+      events: [],
+      refundUSDC: '0',
+      refundStatus: 'not-finalized',
+      claimableUSDC: '0',
+      activeSegmentIndex: null,
+      isSimulated: simulationMode,
+      error: null,
+      challengeEndsAt: null,
+    };
+    this.creatorOffer = null;
+    this.creatorAddress = '';
+    this.signerAccount = simulationMode ? this.simulationAccount : privateKeyToAccount(getOrCreateSignerKey());
+    this.addEvent('Session reset', undefined, 'Ready for fresh demo recording');
+    this.notify();
+  }
 }
 
 export const protocolManager = new ProtocolLifecycleManager();

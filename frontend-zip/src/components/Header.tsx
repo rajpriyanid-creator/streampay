@@ -17,6 +17,7 @@ import {
   Power,
   RefreshCw,
   Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 import { protocolManager, NetworkType } from '../lib/protocol/sessionManager';
 import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
@@ -30,6 +31,7 @@ interface HeaderProps {
   walletBalance: string;
   isConnected: boolean;
   onOpenManifest?: () => void;
+  onResetDemoSession?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -40,6 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
   walletBalance,
   isConnected,
   onOpenManifest,
+  onResetDemoSession,
 }) => {
   const [networkMenuOpen, setNetworkMenuOpen] = useState(false);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
@@ -282,6 +285,19 @@ export const Header: React.FC<HeaderProps> = ({
                   <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Dynamic Auth & Embedded Wallets</span>
                 </button>
+
+                {onResetDemoSession && (
+                  <button
+                    onClick={() => {
+                      setWalletMenuOpen(false);
+                      onResetDemoSession();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-amber-300 hover:bg-amber-950/20 transition-colors border-t border-[#231c15] mt-1 pt-2"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Reset Demo Session</span>
+                  </button>
+                )}
 
               </div>
             </div>

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2, Banknote } from 'lucide-react';
+import { Receipt, ShieldCheck, ExternalLink, RefreshCw, Lock, CheckCircle2, Banknote, RotateCcw } from 'lucide-react';
 import { StreamSessionState, WalletState } from '../lib/protocol/sessionManager';
 import { fetchLiveEnvioTelemetry, EnvioTelemetry } from '../lib/envioClient';
 
@@ -21,6 +21,7 @@ interface PaymentsViewProps {
   onOpenSession?: () => void;
   onSignCreatorClose?: () => void;
   creatorCloseSigned?: boolean;
+  onResetDemoSession?: () => void;
 }
 
 export const PaymentsView: React.FC<PaymentsViewProps> = ({
@@ -36,6 +37,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   onOpenSession,
   onSignCreatorClose,
   creatorCloseSigned,
+  onResetDemoSession,
 }) => {
   const [minutes, setMinutes] = useState('10');
   const [envioTelemetry, setEnvioTelemetry] = useState<EnvioTelemetry | null>(null);
@@ -198,6 +200,14 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
               </span>
             </button>
           )}
+          <button
+            onClick={onResetDemoSession}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-850 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 transition shadow-sm"
+            title="Clear cached session state and generate a fresh signer key for recording demos"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+            <span>Reset Demo State</span>
+          </button>
         </div>
       </div>
 

@@ -285,6 +285,12 @@ export default function App() {
     }
   };
 
+  const handleResetDemoSession = () => {
+    protocolManager.resetDemoSession();
+    setIsPlaying(false);
+    alert('Demo session state has been reset!\n\nCached session cleared and a fresh ephemeral signer key has been generated. You can now open a fresh session or switch to Simulation mode for clean video recording.');
+  };
+
   const handleRefreshManifest = async () => {
     try {
       const m = await accessService.getManifest(currentStreamId);
@@ -317,6 +323,7 @@ export default function App() {
         walletBalance={wallet.balanceUSDC}
         isConnected={wallet.isConnected}
         onOpenManifest={() => setIsOpenManifestModal(true)}
+        onResetDemoSession={handleResetDemoSession}
       />
 
       {/* Main 3-Column Layout */}
@@ -420,6 +427,7 @@ export default function App() {
               onOpenSession={() => setIsOpenSessionModal(true)}
               onSignCreatorClose={handleSignCreatorClose}
               creatorCloseSigned={creatorState.closeAckSigned}
+              onResetDemoSession={handleResetDemoSession}
             />
           )}
 
