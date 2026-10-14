@@ -34,6 +34,7 @@ const settlementAbi = [
   { type: 'function', name: 'claim', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }], outputs: [] },
   { type: 'function', name: 'claimable', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }, { name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'requestClose', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [] },
+  { type: 'function', name: 'finalizeAfterChallenge', stateMutability: 'nonpayable', inputs: [{ name: 'sessionId', type: 'bytes32' }], outputs: [] },
 ] as const;
 const tokenAbi = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ type: 'uint256' }] },
@@ -130,3 +131,11 @@ export async function requestClose(p: { walletClient: any; rpc: string; settleme
   if (receipt.status !== 'success') throw new Error(`Request close failed: ${txHash}`);
   return txHash;
 }
+
+export async function finalizeAfterChallenge(p: { walletClient: any; rpc: string; settlement: Address; account: Address; sessionId: Hex }): Promise<Hex> {
+  const txHash = await p.walletClient.writeContract({ address: p.settlement, abi: settlementAbi, functionName: 'finalizeAfterChallenge', args: [p.sessionId], account: p.account });
+  const receipt = await publicClient(p.rpc).waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== 'success') throw new Error(`Finalize challenge failed: ${txHash}`);
+  return txHash;
+}
+

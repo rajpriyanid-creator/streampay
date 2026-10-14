@@ -25,6 +25,7 @@ import {
   readClaimable,
   claimRefund,
   requestClose as requestRealClose,
+  finalizeAfterChallenge as finalizeRealAfterChallenge,
 } from './realLifecycle';
 
 export type NetworkType = 'local' | 'testnet';
@@ -32,7 +33,7 @@ export interface WalletState { address: Address | ''; chainId: number; network: 
 export interface VerificationLog { id: string; segmentIndex: number; timestamp: string; durationUnits: number; byteLength: number; segmentSha256: Hex; computedSha256: Hex; sha256Valid: boolean; leaf: Hex; merkleValid: boolean; proofLength: number; token: string; cumulativeUnits: string; mediaMimeType?: string; mediaData?: Uint8Array; }
 export interface SessionEvent { id: string; type: string; timestamp: string; txHash?: Hex; detail?: string; }
 export interface StreamSessionState {
-  sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed'; cumulativeUnits: number; settledUnits: number;
+  sessionId: Hex | null; status: 'inactive' | 'opening' | 'active' | 'checkpointing' | 'closing' | 'closed' | 'close_requested'; cumulativeUnits: number; settledUnits: number;
   initialDepositUSDC: string; unredeemedUSDC: string; sessionSigner: Address | ''; payer: Address | ''; recipient: Address | ''; contractAddress: Address | ''; paymentToken: Address | '';
   openedAt: number | null; lastTxHash: Hex | null; lastVoucherSignature: Hex | null; lastCloseAckSignature: Hex | null; verificationLogs: VerificationLog[]; events: SessionEvent[]; refundUSDC: string; refundStatus: 'not-finalized' | 'allocated' | 'claimable' | 'claimed' | 'credited' | 'unknown'; claimableUSDC: string; activeSegmentIndex: number | null; isSimulated: boolean; error: string | null;
 }
@@ -618,6 +619,9 @@ export class ProtocolLifecycleManager {
       return null;
     }
     if (!this.session.lastVoucherSignature) throw new Error('Play at least one segment to generate a signed voucher before checkpointing.');
+    if (this.session.sessionSigner && this.signerAccount.address.toLowerCase() !== this.session.sessionSigner.toLowerCase()) {
+      throw new Error(`Cannot submit checkpoint: Local session signer (${this.signerAccount.address}) does not match the on-chain session signer (${this.session.sessionSigner}). To protect your funds and prevent contract revert, please use "Refund Escrow" or "Request Unilateral Close" to reclaim your deposit safely.`);
+    }
     await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
     this.session.status = 'checkpointing';
     this.notify();
@@ -790,17 +794,44 @@ export class ProtocolLifecycleManager {
       const billed = Number(this.session.unredeemedUSDC) || 0;
       const refund = Math.max(0, deposit - billed).toFixed(6);
 
-      const tx = await this.closeSession();
+      const isSignerMatch = !this.session.sessionSigner || this.signerAccount.address.toLowerCase() === this.session.sessionSigner.toLowerCase();
+      const canCooperate = this.session.lastCloseAckSignature && isSignerMatch;
+
+      if (canCooperate || simulationMode || this.session.isSimulated) {
+        try {
+          const tx = await this.closeSession();
+          return {
+            tx,
+            refundAmount: refund,
+            message: Number(refund) > 0
+              ? `${refund} USDC refunded back to your wallet upon cooperative settlement.`
+              : 'Session closed (all escrow consumed by streaming).',
+          };
+        } catch (closeErr) {
+          console.warn('Cooperative close failed, falling back to unilateral close request:', closeErr);
+        }
+      }
+
+      // Safe Unilateral Exit Fallback: Does not require voucher or creator signatures!
+      const tx = await this.requestUnilateralClose();
       return {
         tx,
         refundAmount: refund,
-        message: Number(refund) > 0
-          ? `${refund} USDC refunded back to your wallet upon settlement.`
-          : 'Session closed (all escrow consumed by streaming).',
+        message: `Unilateral close successfully requested on-chain (Tx: ${tx}). Challenge period started; once elapsed, click 'Finalize Refund' to release your remaining ${refund} USDC.`,
       };
     }
 
-    // Case 2: Session is closed and has claimable escrow in contract
+    // Case 2: Session is in close_requested status -> Finalize challenge if window elapsed
+    if ((this.session.status as string) === 'close_requested') {
+      const tx = await this.finalizeCloseAfterChallenge();
+      return {
+        tx,
+        refundAmount: this.session.refundUSDC || '0',
+        message: `Challenge finalized! Full refund transferred directly to your wallet.`,
+      };
+    }
+
+    // Case 3: Session is closed and has claimable escrow in contract
     if (Number(this.session.claimableUSDC) > 0) {
       const claimAmount = this.session.claimableUSDC;
       const tx = await this.claimRefund();
@@ -811,7 +842,7 @@ export class ProtocolLifecycleManager {
       };
     }
 
-    // Case 3: Session is closed and was already refunded/credited
+    // Case 4: Session is closed and was already refunded/credited
     if (this.session.refundStatus === 'credited' || this.session.refundStatus === 'claimed') {
       return {
         tx: this.session.lastTxHash,
@@ -829,7 +860,6 @@ export class ProtocolLifecycleManager {
       return await this.closeSession();
     }
     await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
-    this.session.status = 'closing';
     this.notify();
     const tx = await requestRealClose({
       walletClient: this.walletClient!,
@@ -838,8 +868,33 @@ export class ProtocolLifecycleManager {
       account: requireAddress(this.wallet.address, 'Payer wallet'),
       sessionId: this.session.sessionId,
     });
+    this.session.status = 'close_requested';
     this.session.lastTxHash = tx;
-    this.addEvent('Unilateral close requested', tx, 'Challenge period started on-chain');
+    this.addEvent('Unilateral close requested', tx, '15-minute challenge period started on Monad');
+    this.notify();
+    return tx;
+  }
+
+  async finalizeCloseAfterChallenge(): Promise<Hex | null> {
+    if (!this.session.sessionId) throw new Error('No session active.');
+    if (simulationMode || this.session.isSimulated) {
+      this.session.status = 'closed';
+      this.notify();
+      return null;
+    }
+    await this.ensureWalletClient(requireAddress(this.session.payer || this.wallet.address, 'Payer wallet'));
+    const tx = await finalizeRealAfterChallenge({
+      walletClient: this.walletClient!,
+      rpc: rpcFor(this.network),
+      settlement: requireAddress(this.session.contractAddress, 'Settlement contract'),
+      account: requireAddress(this.wallet.address, 'Payer wallet'),
+      sessionId: this.session.sessionId,
+    });
+    this.session.status = 'closed';
+    this.session.lastTxHash = tx;
+    this.session.refundStatus = 'credited';
+    this.addEvent('Challenge finalized / refund credited', tx, 'Unspent escrow refunded to wallet');
+    if (this.wallet.address) await this.refreshBalance(this.wallet.address);
     this.notify();
     return tx;
   }

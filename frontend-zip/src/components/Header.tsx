@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { protocolManager, NetworkType } from '../lib/protocol/sessionManager';
 import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
+import { StreamPayLogo } from './StreamPayLogo';
 
 interface HeaderProps {
   activeTab: 'stream' | 'payments' | 'docs' | 'manifest';
@@ -95,20 +96,13 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="h-16 w-full px-4 sm:px-6 flex items-center justify-between border-b border-[#1c1813] bg-[#0c0a08]/95 backdrop-blur-md sticky top-0 z-40 select-none shrink-0">
       {/* Left: Brand Logo */}
-      <div className="flex items-center gap-3 cursor-pointer shrink-0" onClick={() => setActiveTab('stream')}>
-        <div className="relative w-8 h-8 flex items-center justify-center">
-          {/* Faceted polygon StreamPay emblem */}
-          <svg viewBox="0 0 32 32" className="w-8 h-8 drop-shadow-[0_0_12px_rgba(217,155,77,0.35)]">
-            <polygon points="4,4 28,16 16,16" fill="#e8a855" />
-            <polygon points="4,4 16,16 4,28" fill="#bc7c31" />
-            <polygon points="4,28 16,16 28,16" fill="#8f571b" />
-          </svg>
-        </div>
-        <div className="flex items-center text-xl font-bold tracking-tight">
-          <span className="text-white font-extrabold">Stream</span>
-          <span className="text-[#d89a4e] font-extrabold ml-[1px]">Pay</span>
-        </div>
-      </div>
+      <StreamPayLogo
+        size={38}
+        showText={true}
+        showBadge={true}
+        variant="3d"
+        onClick={() => setActiveTab('stream')}
+      />
 
       {/* Middle: Navigation Pills */}
       <nav className="flex items-center gap-1.5 p-1 bg-[#13100c] border border-[#231d16] rounded-xl shadow-inner">

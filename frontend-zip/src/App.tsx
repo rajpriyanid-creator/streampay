@@ -266,6 +266,25 @@ export default function App() {
     }
   };
 
+  const handleRequestUnilateralClose = async () => {
+    try {
+      const tx = await protocolManager.requestUnilateralClose();
+      setIsPlaying(false);
+      alert(tx ? `Unilateral close successfully requested on Monad Testnet!\nTx Hash: ${tx}\n\nA 15-minute challenge window has started on-chain. Once this window elapses, click 'Finalize Escrow Refund' to release your remaining escrow.` : 'Unilateral close completed in simulation mode.');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Unilateral close failed');
+    }
+  };
+
+  const handleFinalizeChallenge = async () => {
+    try {
+      const tx = await protocolManager.finalizeCloseAfterChallenge();
+      alert(tx ? `Escrow refund successfully finalized and sent to your wallet!\nTx Hash: ${tx}` : 'Challenge finalized in simulation mode.');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Finalize challenge failed (challenge window may still be active)');
+    }
+  };
+
   const handleRefreshManifest = async () => {
     try {
       const m = await accessService.getManifest(currentStreamId);
@@ -395,6 +414,8 @@ export default function App() {
               onCloseSession={handleCloseSession}
               onClaimRefund={handleClaimRefund}
               onRefundSession={handleRefundSession}
+              onRequestUnilateralClose={handleRequestUnilateralClose}
+              onFinalizeChallenge={handleFinalizeChallenge}
               onRefreshClaimable={handleRefreshClaimable}
               onOpenSession={() => setIsOpenSessionModal(true)}
               onSignCreatorClose={handleSignCreatorClose}

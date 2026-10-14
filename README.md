@@ -1,4 +1,12 @@
-# StreamPay — Monad Pay-Per-Second Video Streaming Protocol (v2.5)
+<p align="center">
+  <img src="assets/logo-3d.jpg" alt="StreamPay Logo" width="140" style="border-radius: 28px;" />
+</p>
+
+<h1 align="center">StreamPay — Monad Pay-Per-Second Video Streaming Protocol</h1>
+
+<p align="center">
+  <em>Sub-cent pay-per-second video streaming on Monad with zero-gas off-chain vouchers and cryptographic zero-trust delivery.</em>
+</p>
 
 [![CI](https://github.com/rajpriyanid-creator/streampay/actions/workflows/ci.yml/badge.svg)](https://github.com/rajpriyanid-creator/streampay/actions/workflows/ci.yml)
 [![Foundry Tests](https://img.shields.io/badge/Foundry%20Tests-47%20Passed-brightgreen)](contracts/test/StreamPaySettlement.t.sol)

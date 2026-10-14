@@ -15,6 +15,8 @@ interface PaymentsViewProps {
   onCloseSession: () => void;
   onClaimRefund: () => void;
   onRefundSession?: () => void;
+  onRequestUnilateralClose?: () => void;
+  onFinalizeChallenge?: () => void;
   onRefreshClaimable: () => void;
   onOpenSession?: () => void;
   onSignCreatorClose?: () => void;
@@ -28,6 +30,8 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   onCloseSession,
   onClaimRefund,
   onRefundSession,
+  onRequestUnilateralClose,
+  onFinalizeChallenge,
   onRefreshClaimable,
   onOpenSession,
   onSignCreatorClose,
@@ -147,9 +151,30 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                 title="Settle remaining balance and close payment channel cooperatively"
               >
                 <Lock className="w-3.5 h-3.5" />
-                <span>Close Session</span>
+                <span>Cooperative Close</span>
               </button>
+
+              {onRequestUnilateralClose && (
+                <button
+                  onClick={onRequestUnilateralClose}
+                  className="px-3.5 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/50 border border-red-800/50 text-red-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Unilateral exit: Reclaims remaining escrow on Monad without requiring creator or voucher signatures"
+                >
+                  <span>Unilateral Exit</span>
+                </button>
+              )}
             </>
+          )}
+
+          {session.status === 'close_requested' && (
+            <button
+              onClick={onFinalizeChallenge || onRefundSession}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black text-xs font-bold flex items-center gap-2 cursor-pointer shadow-md transition-all"
+              title="Finalize challenge and claim remaining escrow to your wallet"
+            >
+              <Banknote className="w-4 h-4" />
+              <span>Finalize Escrow Refund</span>
+            </button>
           )}
         </div>
       </div>
@@ -267,12 +292,38 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                 You currently have <span className="font-mono text-emerald-300 font-bold">{computedRefund} USDC</span> in unspent escrow. You can refund this balance back to your wallet at any time by closing the session.
               </p>
             </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onRefundSession || onCloseSession}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer transition-all whitespace-nowrap"
+              >
+                <Banknote className="w-4 h-4" />
+                <span>Refund Remaining Escrow ({computedRefund} USDC)</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Case 1b: Session is in Close Requested / Challenge Window */}
+        {session.status === 'close_requested' && (
+          <div className="mt-3 p-4 rounded-xl border border-amber-900/70 bg-amber-950/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-amber-200">
+                  Unilateral Close Challenge Active on Monad
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-300 mt-1 max-w-xl">
+                Your unilateral close request has been recorded on Monad Testnet. Once the 15-minute challenge window concludes, click Finalize Refund to release all unspent escrow ({session.refundUSDC !== '0' ? session.refundUSDC : computedRefund} USDC) directly to your wallet.
+              </p>
+            </div>
             <button
-              onClick={onRefundSession || onCloseSession}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer transition-all whitespace-nowrap"
+              onClick={onFinalizeChallenge || onRefundSession}
+              className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all whitespace-nowrap"
             >
               <Banknote className="w-4 h-4" />
-              <span>Refund Remaining Escrow ({computedRefund} USDC)</span>
+              <span>Finalize Refund On-Chain</span>
             </button>
           </div>
         )}

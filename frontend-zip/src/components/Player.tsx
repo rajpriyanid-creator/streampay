@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { StreamManifest } from '../lib/protocol/manifest';
 import { StreamSessionState } from '../lib/protocol/sessionManager';
+import { StreamPayLogo } from './StreamPayLogo';
 
 interface PlayerProps {
   manifest: StreamManifest;
@@ -403,12 +404,10 @@ export const Player: React.FC<PlayerProps> = ({
           </p>
         </div>
 
-        {/* Brand Badge in Top-Right matching screenshot */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-[#3e2e1e] text-xs font-semibold shadow-md">
-          <div className="w-4 h-4 rounded-full bg-[#d89a4e] flex items-center justify-center text-black">
-            <Play className="w-2 h-2 fill-current ml-[1px]" />
-          </div>
-          <span className="text-white tracking-tight">StreamPay</span>
+        {/* Brand Badge in Top-Right with official StreamPay emblem */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md border border-[#3e2e1e] text-xs font-semibold shadow-md">
+          <StreamPayLogo size={20} showText={false} variant="3d" />
+          <span className="text-white tracking-tight font-bold">StreamPay</span>
         </div>
       </div>
 
